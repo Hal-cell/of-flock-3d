@@ -272,3 +272,26 @@ Git tags marking stable checkpoints. Use `git checkout <tag>` to inspect, or `gi
 - 多滤波器类型（HP / BP / notch）
 - envelope follower → cutoff（声音明亮跟着粒子动）
 - 给 saw 加 PWM 或更复杂波形
+
+## rp-10 — Cap drone polyphony at 4
+
+**Commit**: `git tag rp-10-drone-cap-4` → `0d54bbf`
+
+**Behavior spec**:
+- 0 clusters → 所有 drone 释放到静音
+- 1 cluster → 1 drone attack → sustain
+- N clusters (1..4) → N drones attack → sustain，pitch 自动 chord 分配
+- cluster 消失 → 对应 drone 启动 release
+- cluster 在 release 中复现近邻 → 同一 voice rebounds 回 sustain
+- **最多 4 个 drone 同时发声**（cluster > 4 时只发声 top-4 by mass）
+
+**Changes from rp-09**:
+- NUM_DRONE_VOICES: 8 → 4
+- HUD 显示 'clusters: N   drones active: M / 4'
+
+ADSR 行为已实现（rp-09），本次只是精简池容量到用户指定的 4。
+
+**Use this checkpoint to**:
+- 试不同 cap（如 6 或 8）— 改 NUM_DRONE_VOICES 常量
+- 加 voice stealing（cluster > 4 时偷小 voice 给大 cluster）
+- 改 release rebound 行为
