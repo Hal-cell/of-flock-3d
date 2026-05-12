@@ -132,3 +132,32 @@ Git tags marking stable checkpoints. Use `git checkout <tag>` to inspect, or `gi
 
 **Use this checkpoint to**:
 - 试验不同 accent 设计（更高 octave、不同音色、彩色闪烁等）
+
+## rp-06 — Tunable event synth (per-partial GUI control)
+
+**Commit**: `git tag rp-06-tunable-synth` → `ca44972`
+
+**What's new**:
+- 把硬编码的 partial 结构（ratio / amp / decay）完全暴露到 GUI
+- 13 个新参数全部归入 `partials` 子组：
+  - `p0..p3 ratio`  (频率倍率，0.25..12.0)
+  - `p0..p3 amp`    (振幅，0..1.5)
+  - `p0..p3 decay`  (衰减 ratio，0.05..2.0)
+- `attack (ms)`     起音 ramp（独立暴露）
+- 架构改进：partial 计算完全在主线程 → TriggerEvent 完整携带 →
+  音频线程零成本 copy，无 ofParameter 读取，线程更安全
+
+**Defaults 仍是 tubular bell**（{1.0, 2.06, 3.18, 4.34}），向后兼容。
+
+**调音能力**:
+| 想要 | 怎么调 |
+|---|---|
+| 纯 sine（"ping") | p1/p2/p3 amp 全调 0 |
+| 锯齿和谐音 | p1/p2/p3 ratio = 2/3/4, amp 阶梯递减 |
+| 编钟 / gong | ratio 调成不和谐（如 1, 2.51, 5.43, 7.87） |
+| 木琴 marimba | ratio = 1, 4.0, 10.0, 17; 高分音衰减极快 |
+| 长 chime | decay = 1.0 全分音，attack 5-10ms |
+
+**Use this checkpoint to**:
+- 调出自己心爱的音色后保存 settings.xml 当 preset
+- 探索极端参数空间不破坏稳定基线
