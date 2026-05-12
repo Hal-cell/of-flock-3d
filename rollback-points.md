@@ -108,3 +108,27 @@ Git tags marking stable checkpoints. Use `git checkout <tag>` to inspect, or `gi
 **Use this checkpoint to**:
 - 试验不同 flash 风格（彩色闪烁 / 仅 size pulse / 仅 alpha 闪烁）
 - 在视觉密度上有差异化展示
+
+## rp-05 — Accent merges (chance-driven octave + larger flash)
+
+**Commit**: `git tag rp-05-accent-octave` → `77576d7`
+
+**What's new**:
+- 每次 merge 抛一次骰子 → 决定本次是否为"accent" 重音事件
+- 一次抛骰子结果同步影响视觉 + 音频，保证 audio-visual 严格对齐
+- **视觉端**：accent flash 更大（默认 2.5x size）+ 更久（2x 时长）
+- **音频端**：accent event 基频 ×2（+1 octave）+ 振幅 1.3x
+- 新增 Particle.flashScale + CollisionEvent.isAccent flag
+
+**GUI 新参数**:
+  - `accent chance` (0..1, 默认 0.1 = 10% 概率)
+  - `accent size`   (1..5, 默认 2.5x 普通 flash)
+
+**Sonic + visual character**:
+  - 在持续的颗粒流中偶有"重音"突起 — 听觉上更亮的"叮"
+  - 视觉上同时是更大的白闪 → 视听强同步
+  - 调高 `accent chance` 到 0.3-0.5 → 节奏感更强烈
+  - 调到 1.0 → 全部 accent，相当于把 root pitch 整体 +1 octave
+
+**Use this checkpoint to**:
+- 试验不同 accent 设计（更高 octave、不同音色、彩色闪烁等）
