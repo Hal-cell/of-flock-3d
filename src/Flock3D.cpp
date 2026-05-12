@@ -55,11 +55,17 @@ void Flock3D::buildGui(ofParameterGroup& group) {
 	group.add(accentChance.set("accent chance",  0.1f, 0.0f, 1.0f));      // 10% 默认
 	group.add(accentSizeMul.set("accent size",   2.5f, 1.0f, 5.0f));      // 普通的 2.5 倍 size
 
-	// ─── Cluster detection（BFS 连通区域 + 总量阈值）───
-	group.add(clusterGridRes.set("cluster grid",       12,   4,   32));
-	group.add(clusterCellDensity.set("cluster cellDensity", 6, 2, 100));
-	group.add(clusterMinCount.set("cluster minCount", 30,  5,  500));
-	group.add(clusterMinMass.set("cluster minMass",   60.0f, 5.0f, 1000.0f));
+	// ─── Cluster detection（DBSCAN + 持久化追踪 + 平滑）───
+	// DBSCAN 检测当前帧：每粒子半径 R 内邻居数 ≥ minNeighbors → 核心点 → BFS 合并
+	// 跨帧追踪：匹配后 age++；没匹配则 grace++；超出 grace 才彻底死亡
+	// 平滑：centroid 用 EMA 防抖动
+	group.add(clusterRadius.set("cluster radius",         25.0f, 5.0f, 100.0f));
+	group.add(clusterMinNeighbors.set("cluster minNeighbors", 12,   3,    50));
+	group.add(clusterMinCount.set("cluster minCount",      30,   5,    300));
+	group.add(clusterMinAge.set("cluster minAge",          8,    1,    60));
+	group.add(clusterGracePeriod.set("cluster gracePeriod", 30,   1,    120));
+	group.add(clusterSmoothing.set("cluster smoothing",   0.7f, 0.0f, 0.95f));
+	group.add(clusterTrackRadius.set("cluster trackRadius", 80.0f, 10.0f, 400.0f));
 
 	// ─── Trail（光束尾巴）───
 	// length = baseLen × (0.5 + audio_influence × sensitivity × 1.5)
@@ -624,141 +630,267 @@ Flock3D::Stats Flock3D::getStats() const {
 }
 
 //--------------------------------------------------------------
-//  Cluster detection（grid hash + BFS 连通区域合并）
-//  - 步骤 1：把粒子塞进 3D grid
-//  - 步骤 2：找种子 cell（density ≥ cellDensity）
-//  - 步骤 3：BFS 把相邻密集 cell 合并成一个 cluster
-//  - 步骤 4：用 minCount / minMass 过滤掉太小的 cluster
+//  Cluster detection — DBSCAN + 持久化追踪 + 时间平滑
+//
+//  3 阶段：
+//    A. DBSCAN（当前帧）：spatial hash → 邻居计数 → 核心点 → BFS 合并
+//    B. 跨帧匹配：用 predict + greedy 把 raw 匹配到 tracked
+//                未匹配的 tracked → gracePeriod++
+//                未匹配的 raw → 新建 tracked
+//                超出 grace → 真正死亡
+//    C. 平滑输出：centroid 用 EMA，过滤 age 不够的（hysteresis）
 //--------------------------------------------------------------
-std::vector<Flock3D::Cluster> Flock3D::getClusters(int maxK) const {
-	int gridRes = clusterGridRes;
-	if (gridRes < 2) gridRes = 2;
-	int totalCells = gridRes * gridRes * gridRes;
-
-	struct Cell {
-		float mass = 0.0f;
-		int   count = 0;
-		glm::vec3 posSum{0};
-		glm::vec3 velSum{0};
-		float colR = 0, colG = 0, colB = 0;
-	};
-	std::vector<Cell> grid(totalCells);
+std::vector<Flock3D::Cluster> Flock3D::getClusters(int maxK) {
+	int n = (int)particles.size();
 
 	float wr = worldRadius.get();
-	float invScale = (float)gridRes / (wr * 2.0f);
+	float radius = clusterRadius;
+	float radiusSq = radius * radius;
+	int   minNbrs = clusterMinNeighbors;
+	int   minSize = clusterMinCount;
 
-	// 步骤 1：粒子分桶
-	for (const auto& p : particles) {
-		if (!p.alive) continue;
-		if (p.fadeOutTimer >= 0) continue;
-
-		int ix = (int)((p.pos.x + wr) * invScale);
-		int iy = (int)((p.pos.y + wr) * invScale);
-		int iz = (int)((p.pos.z + wr) * invScale);
-		if (ix < 0 || ix >= gridRes) continue;
-		if (iy < 0 || iy >= gridRes) continue;
-		if (iz < 0 || iz >= gridRes) continue;
-
-		int idx = ix + iy * gridRes + iz * gridRes * gridRes;
-		Cell& cell = grid[idx];
-		cell.mass  += p.mass;
-		cell.count++;
-		cell.posSum += p.pos;
-		cell.velSum += p.velocity;
-		cell.colR += p.color.r;
-		cell.colG += p.color.g;
-		cell.colB += p.color.b;
-	}
-
-	int cellDensity = std::max(2, (int)clusterCellDensity);
-	int minCount    = (int)clusterMinCount;
-	float minMass   = clusterMinMass;
-
-	// 步骤 2-3：BFS 合并相邻密集 cell
-	std::vector<bool> visited(totalCells, false);
-	std::vector<Cluster> clusters;
-	clusters.reserve(maxK + 4);
-
-	auto cellIdx3 = [gridRes](int x, int y, int z) {
-		return x + y * gridRes + z * gridRes * gridRes;
+	// ────────────────────────────────────────
+	// A. DBSCAN：当前帧的 raw clusters（没 ID，没历史）
+	// ────────────────────────────────────────
+	struct RawCluster {
+		glm::vec3    centroid;
+		glm::vec3    velocity;
+		float        totalMass;
+		ofFloatColor avgColor;
+		int          particleCount;
 	};
+	std::vector<RawCluster> rawClusters;
 
-	for (int z = 0; z < gridRes; z++) {
-		for (int y = 0; y < gridRes; y++) {
-			for (int x = 0; x < gridRes; x++) {
-				int idx = cellIdx3(x, y, z);
-				if (visited[idx]) continue;
-				if (grid[idx].count < cellDensity) continue;
+	if (n > 0) {
+		// Grid 自动按半径选大小，3×3×3 cells 覆盖搜索区
+		int gridRes = std::max(4, std::min(40, (int)((wr * 2.0f) / radius)));
+		int totalCells = gridRes * gridRes * gridRes;
+		float invScale = (float)gridRes / (wr * 2.0f);
 
-				// BFS：种子在 (x,y,z)，扩展到所有邻接密集 cell
-				Cluster c;
-				float    sumMass = 0;
-				int      sumCount = 0;
-				glm::vec3 sumPos(0), sumVel(0);
-				float    sumR = 0, sumG = 0, sumB = 0;
+		// 复用 cached buffers
+		if ((int)clusterGrid.size() != totalCells) {
+			clusterGrid.resize(totalCells);
+		}
+		for (auto& cell : clusterGrid) cell.clear();
 
-				std::vector<int> stack;
-				stack.reserve(32);
-				stack.push_back(idx);
-				visited[idx] = true;
+		if ((int)particleCellCache.size() != n) {
+			particleCellCache.assign(n, -1);
+		} else {
+			std::fill(particleCellCache.begin(), particleCellCache.end(), -1);
+		}
 
-				while (!stack.empty()) {
-					int curIdx = stack.back();
-					stack.pop_back();
+		// spatial hash
+		for (int i = 0; i < n; i++) {
+			const auto& p = particles[i];
+			if (!p.alive) continue;
+			if (p.fadeOutTimer >= 0) continue;
 
-					const Cell& cell = grid[curIdx];
-					sumMass  += cell.mass;
-					sumCount += cell.count;
-					sumPos   += cell.posSum;
-					sumVel   += cell.velSum;
-					sumR     += cell.colR;
-					sumG     += cell.colG;
-					sumB     += cell.colB;
+			int ix = (int)((p.pos.x + wr) * invScale);
+			int iy = (int)((p.pos.y + wr) * invScale);
+			int iz = (int)((p.pos.z + wr) * invScale);
+			if (ix < 0) ix = 0; if (ix >= gridRes) ix = gridRes - 1;
+			if (iy < 0) iy = 0; if (iy >= gridRes) iy = gridRes - 1;
+			if (iz < 0) iz = 0; if (iz >= gridRes) iz = gridRes - 1;
+			int idx = ix + iy * gridRes + iz * gridRes * gridRes;
+			clusterGrid[idx].push_back(i);
+			particleCellCache[i] = idx;
+		}
 
-					int cz = curIdx / (gridRes * gridRes);
-					int cy = (curIdx / gridRes) % gridRes;
-					int cx = curIdx % gridRes;
+		// helper：收集粒子 i 半径内的邻居
+		auto collectNeighbors = [&](int i, std::vector<int>& out) {
+			out.clear();
+			int cellIdx = particleCellCache[i];
+			if (cellIdx < 0) return;
+			const auto& p = particles[i];
+			int cz = cellIdx / (gridRes * gridRes);
+			int cy = (cellIdx / gridRes) % gridRes;
+			int cx = cellIdx % gridRes;
+			for (int dz = -1; dz <= 1; dz++)
+			for (int dy = -1; dy <= 1; dy++)
+			for (int dx = -1; dx <= 1; dx++) {
+				int nx = cx + dx, ny = cy + dy, nz = cz + dz;
+				if (nx < 0 || nx >= gridRes) continue;
+				if (ny < 0 || ny >= gridRes) continue;
+				if (nz < 0 || nz >= gridRes) continue;
+				int nIdx = nx + ny * gridRes + nz * gridRes * gridRes;
+				for (int j : clusterGrid[nIdx]) {
+					if (j == i) continue;
+					glm::vec3 diff = particles[j].pos - p.pos;
+					if (glm::dot(diff, diff) < radiusSq) out.push_back(j);
+				}
+			}
+		};
 
-					// 6 个面邻居（不算对角，足够稳定）
-					int neighbors[6][3] = {
-						{cx-1, cy, cz}, {cx+1, cy, cz},
-						{cx, cy-1, cz}, {cx, cy+1, cz},
-						{cx, cy, cz-1}, {cx, cy, cz+1}
-					};
-					for (int n = 0; n < 6; n++) {
-						int nx = neighbors[n][0];
-						int ny = neighbors[n][1];
-						int nz = neighbors[n][2];
-						if (nx < 0 || nx >= gridRes) continue;
-						if (ny < 0 || ny >= gridRes) continue;
-						if (nz < 0 || nz >= gridRes) continue;
-						int nIdx = cellIdx3(nx, ny, nz);
-						if (visited[nIdx]) continue;
-						// 邻居只要"半密集"就并入（拓展性更柔和）
-						if (grid[nIdx].count < std::max(2, cellDensity / 2)) continue;
-						visited[nIdx] = true;
-						stack.push_back(nIdx);
+		// 标记核心点
+		if ((int)isCoreCache.size() != n) isCoreCache.assign(n, 0);
+		else std::fill(isCoreCache.begin(), isCoreCache.end(), 0);
+		tmpNbrsCache.clear();
+		tmpNbrsCache.reserve(128);
+
+		for (int i = 0; i < n; i++) {
+			if (particleCellCache[i] < 0) continue;
+			collectNeighbors(i, tmpNbrsCache);
+			if ((int)tmpNbrsCache.size() >= minNbrs) isCoreCache[i] = 1;
+		}
+
+		// BFS 把核心点连成 cluster
+		if ((int)particleClusterCache.size() != n) particleClusterCache.assign(n, -1);
+		else std::fill(particleClusterCache.begin(), particleClusterCache.end(), -1);
+		bfsStackCache.clear();
+
+		for (int seed = 0; seed < n; seed++) {
+			if (!isCoreCache[seed]) continue;
+			if (particleClusterCache[seed] >= 0) continue;
+
+			int curId = (int)rawClusters.size();
+			particleClusterCache[seed] = curId;
+			bfsStackCache.clear();
+			bfsStackCache.push_back(seed);
+
+			glm::vec3 sumPos(0), sumVel(0);
+			float sumMass = 0, sumR = 0, sumG = 0, sumB = 0;
+			int sumCount = 0;
+
+			while (!bfsStackCache.empty()) {
+				int cur = bfsStackCache.back();
+				bfsStackCache.pop_back();
+				const auto& p = particles[cur];
+				sumPos += p.pos;       sumVel += p.velocity;  sumMass += p.mass;
+				sumR += p.color.r;     sumG += p.color.g;     sumB += p.color.b;
+				sumCount++;
+
+				collectNeighbors(cur, tmpNbrsCache);
+				for (int j : tmpNbrsCache) {
+					if (particleClusterCache[j] >= 0) continue;
+					particleClusterCache[j] = curId;
+					if (isCoreCache[j]) {
+						bfsStackCache.push_back(j);
+					} else {
+						const auto& pj = particles[j];
+						sumPos += pj.pos;     sumVel += pj.velocity; sumMass += pj.mass;
+						sumR += pj.color.r;   sumG += pj.color.g;    sumB += pj.color.b;
+						sumCount++;
 					}
 				}
-
-				// 步骤 4：cluster 是否成立
-				if (sumCount < minCount || sumMass < minMass) continue;
-
-				c.totalMass     = sumMass;
-				c.particleCount = sumCount;
-				float invN = 1.0f / (float)sumCount;
-				c.centroid  = sumPos * invN;
-				c.velocity  = sumVel * invN;
-				c.avgColor  = ofFloatColor(sumR * invN, sumG * invN, sumB * invN, 1.0f);
-				clusters.push_back(c);
 			}
+
+			if (sumCount < minSize) continue;
+
+			RawCluster rc;
+			rc.particleCount = sumCount;
+			rc.totalMass     = sumMass;
+			float invN = 1.0f / (float)sumCount;
+			rc.centroid = sumPos * invN;
+			rc.velocity = sumVel * invN;
+			rc.avgColor = ofFloatColor(sumR * invN, sumG * invN, sumB * invN, 1.0f);
+			rawClusters.push_back(rc);
 		}
 	}
 
-	std::sort(clusters.begin(), clusters.end(),
+	// ────────────────────────────────────────
+	// B. 跨帧匹配：raw clusters ↔ tracked clusters
+	// ────────────────────────────────────────
+	float trackR    = clusterTrackRadius;
+	float trackRSq  = trackR * trackR;
+	float smoothing = ofClamp(clusterSmoothing.get(), 0.0f, 0.95f);
+	float dt = ofGetLastFrameTime();
+	if (dt > 0.1f) dt = 0.1f;
+
+	std::vector<bool> rawMatched(rawClusters.size(), false);
+
+	// 给每个 tracked 找最近的 raw（greedy；按 mass 降序优先）
+	std::vector<int> trackedOrder(trackedClusters.size());
+	for (int i = 0; i < (int)trackedClusters.size(); i++) trackedOrder[i] = i;
+	std::sort(trackedOrder.begin(), trackedOrder.end(),
+		[this](int a, int b){ return trackedClusters[a].totalMass > trackedClusters[b].totalMass; });
+
+	for (int ti : trackedOrder) {
+		auto& tc = trackedClusters[ti];
+		// 预测下一帧位置（基于速度）
+		glm::vec3 predicted = tc.centroid + tc.velocity * dt;
+
+		int bestRaw = -1;
+		float bestDistSq = trackRSq;
+		for (int ri = 0; ri < (int)rawClusters.size(); ri++) {
+			if (rawMatched[ri]) continue;
+			glm::vec3 d = rawClusters[ri].centroid - predicted;
+			float ds = glm::dot(d, d);
+			if (ds < bestDistSq) { bestDistSq = ds; bestRaw = ri; }
+		}
+
+		if (bestRaw >= 0) {
+			const auto& rc = rawClusters[bestRaw];
+			// 估计新速度 = (newPos - oldPos) / dt，平滑后
+			glm::vec3 newVel = (rc.centroid - tc.centroid) / std::max(dt, 1e-4f);
+			tc.velocity = glm::mix(tc.velocity, newVel, 0.3f);
+			// centroid 用 EMA（smoothing 高 → 更稳定但反应慢）
+			tc.centroid = glm::mix(rc.centroid, tc.centroid, smoothing);
+			// 其他属性 lighter smoothing
+			tc.totalMass = glm::mix(rc.totalMass, tc.totalMass, smoothing * 0.5f);
+			tc.particleCount = rc.particleCount;
+			tc.avgColor = ofFloatColor(
+				glm::mix(rc.avgColor.r, tc.avgColor.r, smoothing * 0.5f),
+				glm::mix(rc.avgColor.g, tc.avgColor.g, smoothing * 0.5f),
+				glm::mix(rc.avgColor.b, tc.avgColor.b, smoothing * 0.5f),
+				1.0f
+			);
+			tc.age++;
+			tc.gracePeriod = 0;
+			rawMatched[bestRaw] = true;
+		} else {
+			tc.gracePeriod++;
+		}
+	}
+
+	// 没匹配的 raw → 新建 tracked
+	for (int ri = 0; ri < (int)rawClusters.size(); ri++) {
+		if (rawMatched[ri]) continue;
+		const auto& rc = rawClusters[ri];
+		TrackedCluster nt;
+		nt.id            = nextClusterId++;
+		nt.centroid      = rc.centroid;
+		nt.velocity      = rc.velocity;
+		nt.totalMass     = rc.totalMass;
+		nt.particleCount = rc.particleCount;
+		nt.avgColor      = rc.avgColor;
+		nt.age           = 1;
+		nt.gracePeriod   = 0;
+		trackedClusters.push_back(nt);
+	}
+
+	// 超出 grace 的 tracked → 移除
+	int maxGrace = clusterGracePeriod;
+	trackedClusters.erase(
+		std::remove_if(trackedClusters.begin(), trackedClusters.end(),
+			[maxGrace](const TrackedCluster& t){ return t.gracePeriod > maxGrace; }),
+		trackedClusters.end()
+	);
+
+	// ────────────────────────────────────────
+	// C. 输出：只返回 age >= minAge 的 tracked（hysteresis）
+	// ────────────────────────────────────────
+	int minAge = clusterMinAge;
+	std::vector<Cluster> output;
+	output.reserve(trackedClusters.size());
+	for (const auto& tc : trackedClusters) {
+		if (tc.age < minAge) continue;       // 还在"暖机"，先不报告
+		if (tc.gracePeriod > 0) {
+			// 在 grace 中，age 维持但还在输出（让 drone 继续保持）
+		}
+		Cluster c;
+		c.centroid      = tc.centroid;
+		c.velocity      = tc.velocity;
+		c.totalMass     = tc.totalMass;
+		c.particleCount = tc.particleCount;
+		c.avgColor      = tc.avgColor;
+		output.push_back(c);
+	}
+
+	// 按 mass 排序，取 top-K
+	std::sort(output.begin(), output.end(),
 		[](const Cluster& a, const Cluster& b){ return a.totalMass > b.totalMass; });
-	if ((int)clusters.size() > maxK) clusters.resize(maxK);
-	return clusters;
+	if ((int)output.size() > maxK) output.resize(maxK);
+	return output;
 }
 
 //--------------------------------------------------------------

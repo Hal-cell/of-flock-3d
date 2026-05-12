@@ -66,7 +66,7 @@ public:
 		int          particleCount;
 		ofFloatColor avgColor;
 	};
-	std::vector<Cluster> getClusters(int maxK = 8) const;
+	std::vector<Cluster> getClusters(int maxK = 8);   // 非 const：会更新内部 tracked clusters
 
 	float getWorldRadius() const { return worldRadius.get(); }
 
@@ -111,12 +111,34 @@ private:
 
 	std::vector<Particle> particles;
 	std::vector<CollisionEvent> collisionsThisFrame;   // 每帧清空，update 内累积
+
+	// 持久化追踪的 cluster — 跨帧维持 ID + age + 平滑 centroid
+	struct TrackedCluster {
+		int          id;
+		glm::vec3    centroid;        // EMA 平滑后
+		glm::vec3    velocity;
+		float        totalMass;
+		ofFloatColor avgColor;
+		int          particleCount;
+		int          age;             // 累计存活帧数（用于 hysteresis）
+		int          gracePeriod;     // 上次匹配后未匹配的帧数
+	};
+	std::vector<TrackedCluster> trackedClusters;
+	int nextClusterId = 0;
 	ofEasyCam cam;
 	ofShader  particleShader;
 
 	// 复用的 mesh 对象（避免每帧重新分配；vector capacity 保留）
 	ofMesh particleMesh;
 	ofMesh trailMesh;
+
+	// DBSCAN cluster 检测复用 buffer（避免每帧 8000+ vector heap alloc）
+	std::vector<std::vector<int>> clusterGrid;       // cell idx → particle indices
+	std::vector<int>              particleCellCache; // 每粒子的 cell idx
+	std::vector<char>             isCoreCache;       // char 比 vector<bool> 快
+	std::vector<int>              particleClusterCache;
+	std::vector<int>              bfsStackCache;
+	std::vector<int>              tmpNbrsCache;
 
 	int   width  = 0, height = 0;
 	float noiseTimeOffset = 0.0f;
@@ -170,11 +192,17 @@ private:
 	ofParameter<float> accentChance;    // 0..1，每次 merge 命中的概率
 	ofParameter<float> accentSizeMul;   // accent flash 的 size 倍率
 
-	// ─── Cluster detection（BFS 连通区域 + 总量阈值）───
-	ofParameter<int>   clusterGridRes;     // 3D grid 分辨率
-	ofParameter<int>   clusterCellDensity; // 单个 cell 算"密集"的最小粒子数（种子 + 扩展）
-	ofParameter<int>   clusterMinCount;    // 整个 cluster 总粒子数下限
-	ofParameter<float> clusterMinMass;     // 整个 cluster 总质量下限
+	// ─── Cluster detection（DBSCAN + 持久化追踪 + 时间平滑）───
+	// DBSCAN 检测阶段：每帧独立看粒子位置（解决移动 cluster 问题）
+	// 追踪阶段：跨帧匹配 cluster，加 hysteresis（minAge + gracePeriod）减少 flicker
+	// 平滑阶段：centroid 用 EMA 平滑（避免抖动让 drone voice 抖音）
+	ofParameter<float> clusterRadius;       // DBSCAN 邻居半径（世界单位）
+	ofParameter<int>   clusterMinNeighbors; // DBSCAN minPts（核心点的邻居数下限）
+	ofParameter<int>   clusterMinCount;     // 整 cluster 至少多少粒子才算成立
+	ofParameter<int>   clusterMinAge;       // tracked cluster 出现 N 帧后才"激活"对外输出
+	ofParameter<int>   clusterGracePeriod;  // 匹配失败后保留 N 帧（防短暂消失抖动）
+	ofParameter<float> clusterSmoothing;    // centroid EMA 平滑系数（0=完全跟随 / 1=完全冻结）
+	ofParameter<float> clusterTrackRadius;  // 跨帧匹配的最大距离
 
 	// ─── Trail（光束尾巴）───
 	// 长度 = baseTailLen × (0.5 + audioInfluence × tailAudioSensitivity × 1.5)
