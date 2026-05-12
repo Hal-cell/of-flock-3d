@@ -19,7 +19,7 @@
 	<flock_sep>0.6</flock_sep>
 	<flock_coh>11.848</flock_coh>
 	<coh_speed>0.181201</coh_speed>
-	<flock_nbrR>55.7336</flock_nbrR>
+	<flock_nbrR>78.9965</flock_nbrR>
 	<merge_dist>6</merge_dist>
 	<spawn_rate>40000</spawn_rate>
 	<min_alive>0.89</min_alive>
@@ -35,7 +35,7 @@
 	<flash_intensity>1.2848</flash_intensity>
 	<accent_chance>0.037625</accent_chance>
 	<accent_size>2.48</accent_size>
-	<cluster_grid>3</cluster_grid>
+	<cluster_grid>6</cluster_grid>
 	<cluster_minMass>44.8</cluster_minMass>
 	<cluster_minCount>27</cluster_minCount>
 	<cluster_cellDensity>2</cluster_cellDensity>
@@ -43,5 +43,6 @@
 	<tail_audio_sens>0.934219</tail_audio_sens>
 	<tail_alpha>0.45</tail_alpha>
 	<cluster_sensitivity>1</cluster_sensitivity>
-	<cluster_minFlash>1</cluster_minFlash>
+	<cluster_minFlash>18</cluster_minFlash>
+	<show_cluster_grid>0</show_cluster_grid>
 </Flock_3D>
