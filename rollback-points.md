@@ -195,3 +195,43 @@ Git tags marking stable checkpoints. Use `git checkout <tag>` to inspect, or `gi
 - 切回此基线重新挑选音色
 - 加更多 op（3-op / 4-op FM 算法）
 - 试验 modIndex 调制函数（如非线性映射）
+
+## rp-08 — Polyphonic cluster drones
+
+**Commit**: `git tag rp-08-cluster-drones` → `85cc443`
+
+**What's new**:
+- 实时检测粒子团簇 → 每个 cluster 对应一个 drone voice
+- Cluster 出现 → 对应 drone 淡入；cluster 消散 → drone 淡出
+- 所有 drone + event sound 共享 scale 量化 → 自然和声关系
+
+**Flock3D 侧**:
+- 3D spatial grid hash（默认 12³ cells）
+- 每帧把活粒子塞进 cells；密度 + 总质量超阈值的 cell = cluster
+- `getClusters(maxK)` 返回质量降序 top-K
+- 新 GUI：`cluster grid` / `cluster minMass` / `cluster minCount`
+
+**Synth 侧**:
+- 8-voice polyphonic drone pool
+- 每 voice = 3 个 detuned sine
+- Pitch 用 `massToFreq()` 量化到当前 scale（与 event 同调）
+- Voice 分配按空间邻近：cluster 离已激活 voice 近 → 复用；否则分配空槽
+- Voice 没匹配上 → 启动 fadeout 倒计时（按 release ms）
+- 完全淡出 → 槽位释放
+- Lock-free：atomic targets 跨线程，currentVol 音频本地
+
+**GUI 新参数（ClusterDrone 子组）**:
+| 参数 | 范围 | 默认 |
+|---|---|---|
+| `vol` | 0..1 | 0.5 |
+| `attack (ms)` | 50..4000 | 800 |
+| `release (ms)` | 50..6000 | 1500 |
+| `detune` | 0..0.02 | 0.005 |
+| `proximity` | 10..400 | 80 |
+
+**HUD**: 显示当前检测到的 cluster 数（= drone voice 数）
+
+**Use this checkpoint to**:
+- 探索更智能的音高分配（避免重复音高、preferred 间隔等）
+- 试验 cluster 跟踪算法（DBSCAN、Hungarian assignment）
+- 让每个 cluster 用不同合成方法（不只 sine drone）
