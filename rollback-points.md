@@ -90,3 +90,21 @@ Git tags marking stable checkpoints. Use `git checkout <tag>` to inspect, or `gi
 **Use this checkpoint to**:
 - 基准最佳音质，从这里探索更深入的变种
   （加 Karplus-Strong pluck / noise burst / 颗粒采样回放等）
+
+## rp-04 — Visual flash on collision
+
+**Commit**: `git tag rp-04-merge-flash` → `78eeb54`
+
+**What's new**:
+- Winner 粒子 merge 后**短暂高亮**
+  - 颜色 lerp 向白（HDR 感）
+  - Size pulse 1.0x → 2.5x → 1.0x
+  - Alpha 提升
+- 与已有 fadeIn / fadeOut 自然叠加
+- Particle 新增 `flashTimer` 字段；merge 时设值，update 每帧 -1
+- GUI 新增 `flash frames`（默认 12 ≈ 200ms）+ `flash intensity`（默认 1.0）
+- 闪烁 = 听觉事件触发同时的视觉对应物 → 视听同步
+
+**Use this checkpoint to**:
+- 试验不同 flash 风格（彩色闪烁 / 仅 size pulse / 仅 alpha 闪烁）
+- 在视觉密度上有差异化展示
