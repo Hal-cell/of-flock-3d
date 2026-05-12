@@ -89,27 +89,36 @@ private:
 	float smMeanSpeed     = 0.0f;
 	float smSpread        = 0.0f;
 
-	// ─── EventVoices（粒子触发的短促音）───
-	// 音频线程本地状态，无需 atomic（生命周期完全在音频线程内）
+	// ─── EventVoices（粒子触发的短促音，加性合成）───
+	// 每个 voice 有 NUM_PARTIALS 个 inharmonic 谐振分音
+	// 高分音衰减比低分音快 → 自然的"明亮起音 → 温暖余韵"曲线
+	static constexpr int NUM_PARTIALS = 4;
+	struct Partial {
+		float freq;
+		float amp;     // 当前振幅
+		float decay;   // 每 sample 衰减系数
+		float phase;
+	};
 	struct EventVoice {
-		bool  active = false;
-		float freq;       // Hz
-		float pan;        // 0..1
-		float amp;        // 当前振幅（每 sample 衰减）
-		float decay;      // 每 sample 衰减系数（接近 1 = 慢）
-		float phase;      // 0..1
-		float modIndex;   // FM 调制深度（0=纯 sine，>0 = bell-ish）
+		bool   active = false;
+		int    attackCounter = 0;    // 起音 ramp 计数器
+		int    attackSamples = 0;    // 起音总样本数（避免 click）
+		float  panL = 0.7f;          // 预算的 pan 系数（每 sample 用，不每次三角函数）
+		float  panR = 0.7f;
+		Partial partials[NUM_PARTIALS];
 	};
 	static constexpr int NUM_EVENT_VOICES = 32;
 	std::array<EventVoice, NUM_EVENT_VOICES> eventVoices;
 
 	// ─── Ring buffer 把碰撞事件从主线程传到音频线程（lock-free SPSC）───
 	struct TriggerEvent {
-		float freq;
-		float pan;
-		float amp;
-		float decay;
-		float modIndex;
+		float fundamental;   // P0 频率（Hz）
+		float panL;
+		float panR;
+		float gain;          // 总体振幅
+		float baseDecay;     // P0 的 per-sample 衰减系数
+		float brightness;    // 0..1，越亮高分音越响
+		int   attackSamples; // 起音时长（样本数）
 	};
 	static constexpr int RING_SIZE = 256;   // 必须 2 的幂
 	static_assert((RING_SIZE & (RING_SIZE - 1)) == 0, "RING_SIZE must be power of 2");
@@ -118,10 +127,11 @@ private:
 	std::atomic<int> ringRead{0};
 
 	// ─── ModalReverb（4-tap feedback delay）───
+	// 反馈系数调低 → 中等长度 tail 不掩盖短音细节
 	std::vector<float> delayBuf[4];
 	int  delayWrite[4]    = {0, 0, 0, 0};
 	int  delayLength[4]   = {0, 0, 0, 0};
-	float delayFeedback[4] = {0.65f, 0.62f, 0.58f, 0.55f};
+	float delayFeedback[4] = {0.55f, 0.52f, 0.48f, 0.45f};
 
 	// ─── helpers ───
 	float quantizeToScale(float freq) const;

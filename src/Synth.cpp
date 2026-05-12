@@ -52,46 +52,42 @@ void Synth::updateStats(const Flock3D::Stats& s, float worldRadius){
 //  主线程：每次碰撞推一个 TriggerEvent 到 ring buffer
 //--------------------------------------------------------------
 void Synth::triggerCollision(const Flock3D::CollisionEvent& ev){
-	// 质量门槛：太小不触发
 	if (ev.newMass < minMassToFire) return;
 
 	float wr = a_worldRadius.load();
 
-	// 频率：从 mass 算（可选量化到 scale）
+	// 基频（fundamental P0）
 	float freq;
 	if (eventQuantize) {
-		freq = massToFreq(ev.newMass);   // 带量化
+		freq = massToFreq(ev.newMass);
 	} else {
-		// 不量化：纯 mass → freq 的对数映射
 		float l = log10f(std::max(ev.newMass, 1.0f));
 		float t = ofClamp((l - 0.5f) / 2.0f, 0.0f, 1.0f);
-		t = 1.0f - t;   // mass 大 → 低
+		t = 1.0f - t;
 		freq = rootFreq * powf(2.0f, t * 3.0f);
 	}
 
-	// pan
-	float pan = ofClamp(ev.pos.x / (wr * 2.0f) + 0.5f, 0.0f, 1.0f);
+	// pan：预算成 equal-power 系数（每 sample 用，不调三角函数）
+	float panPos = ofClamp(ev.pos.x / (wr * 2.0f) + 0.5f, 0.0f, 1.0f);
+	float panL = cosf(panPos * HALF_PI);
+	float panR = sinf(panPos * HALF_PI);
 
-	// 衰减：把 ms 转成每 sample 的乘数 exp(-1 / (decaySamples))
-	// amp(t) = amp_0 * exp(-t/T) → 每 sample = exp(-1/(T*sr))
+	// 基础衰减：把 ms 转成每 sample 的指数衰减系数
 	float decaySamples = eventDecayMs * 0.001f * sampleRate;
-	float decay = expf(-1.0f / std::max(decaySamples, 1.0f));
+	float baseDecay = expf(-1.0f / std::max(decaySamples, 1.0f));
 
-	// FM modIndex：color 亮度 → metallic 程度
-	float brightness = (ev.color.r + ev.color.g + ev.color.b) / 3.0f;
-	float modIndex = brightness * 2.5f;   // 0..2.5 范围
+	// 亮度：用整体颜色亮度（也可以用其他映射）
+	float brightness = ofClamp((ev.color.r + ev.color.g + ev.color.b) / 3.0f, 0.0f, 1.0f);
 
-	// 振幅：每 hit 固定，避免少数大碰撞淹没小碰撞
-	float amp = eventGainPerHit;
+	// 起音 ramp：约 2ms（防 click），轻微起音的"瞬态"质感
+	int attackSamples = (int)(0.002f * sampleRate);
 
-	// 写入 ring buffer（lock-free SPSC）
 	int w = ringWrite.load(std::memory_order_relaxed);
 	int next = (w + 1) & (RING_SIZE - 1);
 	if (next == ringRead.load(std::memory_order_acquire)) {
-		// ring 满了 → 丢弃（极少见，RING_SIZE=256 足够 ~5 帧的事件）
-		return;
+		return;   // ring 满 → 丢
 	}
-	eventRing[w] = {freq, pan, amp, decay, modIndex};
+	eventRing[w] = {freq, panL, panR, eventGainPerHit, baseDecay, brightness, attackSamples};
 	ringWrite.store(next, std::memory_order_release);
 }
 
@@ -143,30 +139,56 @@ void Synth::audioOut(ofSoundBuffer& buffer){
 	float verbAmt = reverbAmt;
 	float evtVol = eventVol;
 
-	// ─── 先把 ring buffer 里的 trigger event 分配给空闲 event voices ───
+	// ─── Inharmonic partial 比例（类编钟 / marimba，给打击乐自然金属感）───
+	// {1.0, 2.756, 5.404, 8.933} 是 tubular bell ratios — 稍微调整给柔和一点
+	static const float partialRatios[NUM_PARTIALS] = { 1.0f, 2.06f, 3.18f, 4.34f };
+	// 各分音的振幅基础值（fundamental 最响，高分音渐弱）
+	static const float partialAmps[NUM_PARTIALS]   = { 1.0f, 0.55f, 0.30f, 0.18f };
+	// 各分音衰减时长 ratio（< 1 = 比 P0 衰减快 → 高频先消失，温暖余韵）
+	static const float partialDecayRatio[NUM_PARTIALS] = { 1.0f, 0.55f, 0.35f, 0.22f };
+
+	// ─── 把 ring buffer 里的 trigger event 分配给空闲 event voices ───
 	int r = ringRead.load(std::memory_order_relaxed);
 	int wEnd = ringWrite.load(std::memory_order_acquire);
 	while (r != wEnd) {
 		const TriggerEvent& te = eventRing[r];
-		// 找一个空闲 voice，或抢占振幅最小的（voice stealing）
+
+		// 找空闲 voice，或偷振幅最小的（P0 amp 作为代表）
 		int targetIdx = -1;
 		float minAmp = 1e9;
 		for (int i = 0; i < NUM_EVENT_VOICES; i++) {
 			if (!eventVoices[i].active) { targetIdx = i; break; }
-			if (eventVoices[i].amp < minAmp) {
-				minAmp = eventVoices[i].amp;
+			if (eventVoices[i].partials[0].amp < minAmp) {
+				minAmp = eventVoices[i].partials[0].amp;
 				targetIdx = i;
 			}
 		}
 		if (targetIdx >= 0) {
 			auto& v = eventVoices[targetIdx];
-			v.active   = true;
-			v.freq     = te.freq;
-			v.pan      = te.pan;
-			v.amp      = te.amp;
-			v.decay    = te.decay;
-			v.phase    = 0.0f;     // 重新起始，避免 click
-			v.modIndex = te.modIndex;
+			v.active        = true;
+			v.attackCounter = 0;
+			v.attackSamples = te.attackSamples;
+			v.panL          = te.panL;
+			v.panR          = te.panR;
+
+			for (int p = 0; p < NUM_PARTIALS; p++) {
+				float pFreq = te.fundamental * partialRatios[p];
+				// 限制 partial 频率不超过 Nyquist 一半（避免高音 alias）
+				if (pFreq > sampleRate * 0.45f) pFreq = sampleRate * 0.45f;
+				v.partials[p].freq  = pFreq;
+
+				// 高分音振幅按 brightness 加权（暗色 → 只有 P0；亮色 → 全分音）
+				float ampScale = (p == 0) ? 1.0f : te.brightness;
+				v.partials[p].amp   = te.gain * partialAmps[p] * ampScale;
+
+				// 高分音衰减比 P0 快
+				// 把"每 sample 衰减系数 baseDecay"加快：decay_p = baseDecay^(1/ratio)
+				// 等价于把衰减时长除以 ratio
+				v.partials[p].decay = powf(te.baseDecay, 1.0f / partialDecayRatio[p]);
+
+				// phase 错开避免堆积 click（每个分音不同初相位）
+				v.partials[p].phase = (float)p * 0.123f;
+			}
 		}
 		r = (r + 1) & (RING_SIZE - 1);
 	}
@@ -202,39 +224,49 @@ void Synth::audioOut(ofSoundBuffer& buffer){
 		right += droneOut * 0.5f;
 
 		// ───────────────────────────────
-		// B. EventVoices — 短促粒子触发声
-		//   damped sine + 可选 FM brightness
+		// B. EventVoices — 短促粒子触发声（加性合成 4 inharmonic partials）
+		//   - attack envelope (~2ms) 防起音 click
+		//   - 各分音独立衰减：高分音快，低分音慢 → 自然"亮起音→温暖余韵"
 		// ───────────────────────────────
 		float eventSumL = 0, eventSumR = 0;
 		for (int v = 0; v < NUM_EVENT_VOICES; v++) {
 			auto& vc = eventVoices[v];
 			if (!vc.active) continue;
 
-			// 相位推进
-			float dt = vc.freq / sampleRate;
-			vc.phase += dt;
-			if (vc.phase >= 1.0f) vc.phase -= 1.0f;
+			// Attack envelope：线性 ramp 起音
+			float envAttack = 1.0f;
+			if (vc.attackCounter < vc.attackSamples) {
+				envAttack = (float)vc.attackCounter / (float)vc.attackSamples;
+				vc.attackCounter++;
+			}
 
-			// FM 调制：用一个 1.4 倍频载波调制相位（产生 bell-like 谐波）
-			float modPhase = vc.phase * 1.4f;   // not exact 整数倍 → 不和谐 = 金属感
-			float modulator = sinf(modPhase * TWO_PI) * vc.modIndex;
-			float sample = sinf((vc.phase * TWO_PI) + modulator);
+			// 累加各分音
+			float voiceSample = 0;
+			bool anyAlive = false;
+			for (int p = 0; p < NUM_PARTIALS; p++) {
+				auto& pt = vc.partials[p];
+				if (pt.amp < 0.00001f) continue;
 
-			// 振幅 + 衰减
-			sample *= vc.amp;
-			vc.amp *= vc.decay;
-			if (vc.amp < 0.00001f) {
+				voiceSample += sinf(pt.phase * TWO_PI) * pt.amp;
+
+				pt.phase += pt.freq / sampleRate;
+				if (pt.phase >= 1.0f) pt.phase -= 1.0f;
+				pt.amp *= pt.decay;
+				anyAlive = true;
+			}
+
+			if (!anyAlive) {
 				vc.active = false;
 				continue;
 			}
 
-			// 等功率 pan
-			float panL = cosf(vc.pan * HALF_PI);
-			float panR = sinf(vc.pan * HALF_PI);
-			eventSumL += sample * panL;
-			eventSumR += sample * panR;
+			voiceSample *= envAttack;
+
+			// 预算的 pan 系数（无三角函数 / sample）
+			eventSumL += voiceSample * vc.panL;
+			eventSumR += voiceSample * vc.panR;
 		}
-		// 归一化：除以 voice 数量，但 voice 平均不会全部 active，所以乘 2 提升音量
+		// 归一化：除以 voice 数量
 		eventSumL *= evtVol * (2.0f / NUM_EVENT_VOICES);
 		eventSumR *= evtVol * (2.0f / NUM_EVENT_VOICES);
 		left  += eventSumL;

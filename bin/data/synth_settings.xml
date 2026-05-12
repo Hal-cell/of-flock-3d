@@ -1,10 +1,15 @@
 <?xml version="1.0"?>
 <Synth>
 	<audio_ON>1</audio_ON>
-	<masterVol>0.735</masterVol>
-	<droneVol>0.675</droneVol>
+	<masterVol>0.67</masterVol>
+	<droneVol>0.109883</droneVol>
 	<voiceVol>0.7</voiceVol>
-	<reverbAmt>0.71</reverbAmt>
+	<reverbAmt>1</reverbAmt>
 	<rootFreq__Hz_>91.575</rootFreq__Hz_>
 	<scale>1</scale>
+	<eventVol>1</eventVol>
+	<decay__ms_>180.725</decay__ms_>
+	<hit_gain>0.746</hit_gain>
+	<minMass>0</minMass>
+	<quantize>1</quantize>
 </Synth>
