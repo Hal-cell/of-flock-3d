@@ -65,6 +65,10 @@ void ofApp::update(){
 	// 三个 synth 参数（event decay / FM ratio / drone cutoff）归一化平均
 	flock.setAudioInfluence(synth.getAudioInfluenceForTail());
 
+	// Visual → Audio：tail 长度归一化 → FM idxDecay 正相关调制
+	// 用 base tail length（GUI slider 值），避免反馈循环
+	synth.setTailInfluence(flock.getCurrentTailNormalized());
+
 	// Cluster 检测 → cluster drone voice 池（最多 4 个 drone）
 	auto clusters = flock.getClusters(Synth::getMaxDroneVoices());
 	synth.updateClusterVoices(clusters, flock.getWorldRadius());

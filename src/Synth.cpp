@@ -55,6 +55,8 @@ void Synth::buildGui(ofParameterGroup& group){
 	fmGroup.add(fmRatio.set("FM ratio",          2.0f,  0.5f, 8.0f));    // 自动 snap 到 0.5 倍数
 	fmGroup.add(fmIndex.set("FM index",          3.0f,  0.0f, 12.0f));
 	fmGroup.add(fmIndexDecayMs.set("FM idxDecay (ms)",  40.0f, 1.0f, 500.0f));
+	// Tail 长度 → FM idxDecay 正相关调制（base + tail × depth × 400ms）
+	fmGroup.add(tailToIdxDecayDepth.set("tail → idxDecay", 0.5f, 0.0f, 1.0f));
 	group.add(fmGroup);
 
 	// ─── Cluster Drone 子组（saw + SVF lowpass + chord 优先 pitch）───
@@ -133,7 +135,11 @@ void Synth::triggerCollision(const Flock3D::CollisionEvent& ev){
 	if (ev.isAccent) modIndexInit *= 1.5f;
 
 	// modIndex 衰减（独立于 carrier）
-	float modIdxDecaySamples = fmIndexDecayMs.get() * 0.001f * sampleRate;
+	// Tail 调制：tail 长度 × depth × 400ms 加到 base idxDecay 上（正相关）
+	float tailInf = a_tailInfluence.load();   // 0..1
+	float idxDecayMod = tailInf * tailToIdxDecayDepth.get() * 400.0f;
+	float effIdxDecayMs = fmIndexDecayMs.get() + idxDecayMod;
+	float modIdxDecaySamples = effIdxDecayMs * 0.001f * sampleRate;
 	float modIndexDecay = expf(-1.0f / std::max(modIdxDecaySamples, 1.0f));
 
 	TriggerEvent te;

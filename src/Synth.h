@@ -33,6 +33,9 @@ public:
 	// 主线程调用：传递 cluster 列表 → 驱动 polyphonic drone voice
 	void updateClusterVoices(const std::vector<Flock3D::Cluster>& clusters, float worldRadius);
 
+	// 主线程：tail 长度归一化（0..1）影响 FM idxDecay（正相关）
+	void setTailInfluence(float v) { a_tailInfluence.store(v); }
+
 	// HUD 用：当前活跃（attack/sustain/release 中）的 drone voice 数
 	int getActiveDroneCount() const;
 
@@ -81,6 +84,7 @@ private:
 	ofParameter<float> fmRatio;        // 0.5..8.0，自动 snap 到最近 0.5
 	ofParameter<float> fmIndex;        // 调制深度
 	ofParameter<float> fmIndexDecayMs; // modIndex 衰减时长（ms）
+	ofParameter<float> tailToIdxDecayDepth; // tail 长度对 fmIdxDecay 的调制深度（0..1）
 
 	// ─── Cluster Drone 参数 ───
 	ofParameterGroup   clusterDroneGroup;
@@ -127,6 +131,9 @@ private:
 
 	// 仅保留 worldRadius（cluster pan 需要）
 	std::atomic<float> a_worldRadius  {250.0f};
+
+	// 来自 Flock3D：当前 tail 长度归一化（0..1），驱动 FM idxDecay 调制
+	std::atomic<float> a_tailInfluence{0.0f};
 
 	// ─── EventVoices（粒子触发的短促音，2-op FM 合成）───
 	// 经典 Chowning FM：carrier + modulator
