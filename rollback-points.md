@@ -295,3 +295,27 @@ ADSR 行为已实现（rp-09），本次只是精简池容量到用户指定的 
 - 试不同 cap（如 6 或 8）— 改 NUM_DRONE_VOICES 常量
 - 加 voice stealing（cluster > 4 时偷小 voice 给大 cluster）
 - 改 release rebound 行为
+
+## rp-11 — Fix ADSR cliff (linear envelope + state reset)
+
+**Commit**: `git tag rp-11-fix-envelope-cliff` → `9d00192`
+
+**Bug**: Drone 偶尔突然出现 / 突然消失，绕过 attack / release。
+
+**根因（两个叠加）**:
+1. **指数包络在 release 中途被掐**：旧版用 `current += (target-current)*coef`，
+   coef = `1 - exp(-1/τ)`。τ 时长后只到 0.37，不是 0。但 fadeoutFrames 倒计时
+   按 releaseMs 算 → audio 还在 0.37 时 voice 被 active=false → cliff drop
+2. **复用 voice 时 currentVol 残留**：上次释放结束时 currentVol 卡在 0.37
+   左右，新 voice 分配时没重置 → attack 从 0.37 起步 → "突然出现"
+
+**修复**:
+1. **线性包络**：`perSample = 1 / (envMs * 0.001 * sr)`，时间精准到点严格归零/满值
+2. **新 voice 激活强制重置**：currentVol=0、phase、currentFreq、SVF state 全清
+3. **时间精准倒计时**：用 `ofGetLastFrameTime()` 而不是假设 60fps
+4. **5% 安全余量**：fadeout 倒计时比 audio release 多 5%，确保 envelope 到 0
+   后才释放 voice 槽
+
+**Use this checkpoint to**:
+- 实验更复杂的包络曲线（指数+线性混合、自定义曲线）
+- 加 decay/sustain 阶段（变 ADSR 为完整 4-stage）
