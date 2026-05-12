@@ -69,6 +69,9 @@ void ofApp::update(){
 	// 用 base tail length（GUI slider 值），避免反馈循环
 	synth.setTailInfluence(flock.getCurrentTailNormalized());
 
+	// Field amp 总和 → 风声音量（风声层在 audioOut 内自动衰减/增强）
+	synth.setFieldAmpTotal(flock.getFieldAmpTotal());
+
 	// Cluster 检测 → cluster drone voice 池（最多 4 个 drone）
 	auto clusters = flock.getClusters(Synth::getMaxDroneVoices());
 	synth.updateClusterVoices(clusters, flock.getWorldRadius());

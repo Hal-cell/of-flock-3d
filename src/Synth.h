@@ -36,6 +36,9 @@ public:
 	// 主线程：tail 长度归一化（0..1）影响 FM idxDecay（正相关）
 	void setTailInfluence(float v) { a_tailInfluence.store(v); }
 
+	// 主线程：field amp 总和归一化（0..1）驱动风声音量
+	void setFieldAmpTotal(float v) { a_fieldAmpTotal.store(v); }
+
 	// HUD 用：当前活跃（attack/sustain/release 中）的 drone voice 数
 	int getActiveDroneCount() const;
 
@@ -86,6 +89,24 @@ private:
 	ofParameter<float> fmIndexDecayMs; // modIndex 衰减时长（ms）
 	ofParameter<float> tailToIdxDecayDepth; // tail 长度对 fmIdxDecay 的调制深度（0..1）
 
+	// ─── Wind 层参数（持续滤波噪声，模拟风声）───
+	// 音量 ∝ field amp 总和（field 越强 → 风越响）
+	// 经过 SVF lowpass，立体声独立噪声 → 自然空间感
+	// 信号在 hall reverb 之前混入，因此也会被 reverb 处理
+	ofParameterGroup   windGroup;
+	ofParameter<float> windVol;         // 总音量
+	ofParameter<float> windCutoff;      // SVF lowpass cutoff (Hz)
+	ofParameter<float> windResonance;   // 0..0.95，high = "whistle" 风口哨
+	ofParameter<float> windSensitivity; // field amp → vol 映射的 power curve
+	ofParameter<float> windLfoRate;     // gust 风阵 LFO 速率 (Hz)
+	ofParameter<float> windLfoDepth;    // gust 风阵 LFO 深度（0..1，调制 cutoff）
+
+	// 风声音频线程本地状态
+	// 左右独立 SVF state → 立体声
+	float windSvfLowL = 0, windSvfBandL = 0;
+	float windSvfLowR = 0, windSvfBandR = 0;
+	float windLfoPhase = 0.0f;
+
 	// ─── Cluster Drone 参数 ───
 	ofParameterGroup   clusterDroneGroup;
 	ofParameter<float> clusterDroneVol;     // 总音量
@@ -134,6 +155,9 @@ private:
 
 	// 来自 Flock3D：当前 tail 长度归一化（0..1），驱动 FM idxDecay 调制
 	std::atomic<float> a_tailInfluence{0.0f};
+
+	// 来自 Flock3D：6 个 field amp 总和归一化（0..1），驱动风声音量
+	std::atomic<float> a_fieldAmpTotal{0.0f};
 
 	// ─── EventVoices（粒子触发的短促音，2-op FM 合成）───
 	// 经典 Chowning FM：carrier + modulator

@@ -69,6 +69,16 @@ void Synth::buildGui(ofParameterGroup& group){
 	clusterDroneGroup.add(clusterCutoff.set("cutoff (Hz)",    600.0f, 80.0f, 8000.0f));
 	clusterDroneGroup.add(clusterResonance.set("resonance",   0.3f,   0.0f,  0.95f));
 	group.add(clusterDroneGroup);
+
+	// ─── Wind 子组（持续滤波噪声，音量绑 field amp 总和）───
+	windGroup.setName("Wind");
+	windGroup.add(windVol.set("vol",             0.4f,    0.0f,  1.0f));
+	windGroup.add(windCutoff.set("cutoff (Hz)",  1500.0f, 100.0f, 8000.0f));
+	windGroup.add(windResonance.set("resonance", 0.2f,    0.0f,  0.9f));
+	windGroup.add(windSensitivity.set("sensitivity", 1.0f, 0.1f, 3.0f));
+	windGroup.add(windLfoRate.set("gust rate (Hz)",  0.4f, 0.05f, 4.0f));
+	windGroup.add(windLfoDepth.set("gust depth",    0.4f, 0.0f,  1.0f));
+	group.add(windGroup);
 }
 
 //--------------------------------------------------------------
@@ -419,6 +429,18 @@ void Synth::audioOut(ofSoundBuffer& buffer){
 	float detune = clusterDetune;
 	float detuneRatios[3] = {1.0f, 1.0f + detune, 1.0f - detune};
 
+	// ─── 预算 Wind 层参数（per-buffer，每 sample 不变）───
+	float wndVol = windVol;
+	float wndCutoffBase = ofClamp(windCutoff.get(), 50.0f, sampleRate * 0.4f);
+	float wndQ = 1.0f - ofClamp(windResonance.get(), 0.0f, 0.95f);
+	if (wndQ < 0.05f) wndQ = 0.05f;
+	float wndSens = windSensitivity;
+	float wndFieldAmp = a_fieldAmpTotal.load();   // 0..1
+	// power curve：sensitivity > 1 → 加速；< 1 → 平滑（开始一点就响）
+	float wndAmpScaled = powf(wndFieldAmp, 1.0f / std::max(wndSens, 0.01f));
+	float wndLfoIncr = ofClamp(windLfoRate.get(), 0.0f, 10.0f) / sampleRate;
+	float wndLfoD = windLfoDepth;
+
 	for (int i = 0; i < n; i++) {
 		float left = 0, right = 0;
 
@@ -525,6 +547,44 @@ void Synth::audioOut(ofSoundBuffer& buffer){
 		eventSumR *= evtVol * (2.0f / NUM_EVENT_VOICES);
 		left  += eventSumL;
 		right += eventSumR;
+
+		// ───────────────────────────────
+		// C. Wind — 持续滤波噪声（field amp 总和驱动音量）
+		// L/R 各自独立白噪声 + SVF lowpass → 自然立体声
+		// LFO 微调 cutoff → 风阵 gust 感
+		// 信号在 reverb 之前，因此也会被 hall reverb 处理
+		// ───────────────────────────────
+		if (wndVol > 0.001f && wndAmpScaled > 0.001f) {
+			// LFO 调制 cutoff（gust）
+			windLfoPhase += wndLfoIncr;
+			if (windLfoPhase >= 1.0f) windLfoPhase -= 1.0f;
+			float lfo = sinf(windLfoPhase * TWO_PI);   // -1..1
+			float curCutoff = wndCutoffBase * (1.0f + lfo * wndLfoD * 0.6f);
+			if (curCutoff < 50.0f) curCutoff = 50.0f;
+			if (curCutoff > sampleRate * 0.4f) curCutoff = sampleRate * 0.4f;
+			float wndFc = 2.0f * sinf(PI * curCutoff / sampleRate);
+			if (wndFc > 0.99f) wndFc = 0.99f;
+
+			// 白噪声（L/R 独立）：std::rand() / RAND_MAX 范围 0..1 → 居中到 -1..1
+			float nL = (float)std::rand() * (2.0f / (float)RAND_MAX) - 1.0f;
+			float nR = (float)std::rand() * (2.0f / (float)RAND_MAX) - 1.0f;
+
+			// SVF lowpass L
+			windSvfLowL  += wndFc * windSvfBandL;
+			float highL = nL - windSvfLowL - wndQ * windSvfBandL;
+			windSvfBandL += wndFc * highL;
+
+			// SVF lowpass R
+			windSvfLowR  += wndFc * windSvfBandR;
+			float highR = nR - windSvfLowR - wndQ * windSvfBandR;
+			windSvfBandR += wndFc * highR;
+
+			float wL = windSvfLowL * wndVol * wndAmpScaled;
+			float wR = windSvfLowR * wndVol * wndAmpScaled;
+
+			left  += wL;
+			right += wR;
+		}
 
 		// ───────────────────────────────
 		// D. Hall Reverb — Hadamard FDN + HF damping + pre-delay

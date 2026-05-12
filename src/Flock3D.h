@@ -83,6 +83,18 @@ public:
 		return t;
 	}
 
+	// 6 个 field amp 总和归一化（0..1），给 Synth 风声音量用
+	// 单个 amp 上限 200，6 个全开 = 1200；用 / 400 作归一化分母
+	// → 一个 field=200 → 0.5；两个 field=100+100 → 0.5；满天飞 → 1.0
+	float getFieldAmpTotal() const {
+		float total = noiseAmplitude + vortexAmp + spiralAmp + curlAmp
+		            + attractorAmp + repellerAmp;
+		float norm = total / 400.0f;
+		if (norm < 0.0f) norm = 0.0f;
+		if (norm > 1.0f) norm = 1.0f;
+		return norm;
+	}
+
 private:
 	// 每个粒子的 trail 长度上限（编译时常量）
 	// 内存：20K particles × 24 vec3 × 12 bytes ≈ 5.5 MB（可接受）
