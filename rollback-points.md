@@ -161,3 +161,37 @@ Git tags marking stable checkpoints. Use `git checkout <tag>` to inspect, or `gi
 **Use this checkpoint to**:
 - 调出自己心爱的音色后保存 settings.xml 当 preset
 - 探索极端参数空间不破坏稳定基线
+
+## rp-07 — 2-op FM event synth (replacing additive)
+
+**Commit**: `git tag rp-07-fm-synth` → `4c18dd5`
+
+**What changed**:
+- 替换 4-partial 加性合成为经典 **2-op FM**（Chowning 1973）
+  ```
+  output = sin(2π·f_c·t + modIndex·sin(2π·f_m·t))
+  ```
+- GUI 移除 13 个 partial 参数；加 `FM` 子组：
+  - `FM ratio`: 0.5..8.0，自动 snap 到最近 0.5 倍数
+  - `FM index`: 0..12，调制深度（0=纯 sine，10+=极金属）
+  - `FM idxDecay (ms)`: modIndex 衰减时长（独立于 carrier）
+- Brightness（粒子颜色）线性缩放 modIndex（0.3..1.0）
+- Accent 再 × 1.5 modIndex → 更亮的重音
+
+**调音速查**：
+| FM ratio | 听感 |
+|---|---|
+| 0.5  | sub-harmonic，低沉粗厚 |
+| 1.0  | 自我调制，类方波 |
+| 1.5  | 5th 上方调制，柔和 |
+| 2.0  | 奇数谐波，clarinet |
+| 3.0  | 整数倍，brass-y |
+| 3.5  | 不和谐，bell-like |
+| 4.0  | 高谐波，bright EP |
+| 7.0  | 经典 DX7 bell |
+| 7.5  | 极不和谐，gong/anvil |
+
+**Use this checkpoint to**:
+- 切回此基线重新挑选音色
+- 加更多 op（3-op / 4-op FM 算法）
+- 试验 modIndex 调制函数（如非线性映射）
