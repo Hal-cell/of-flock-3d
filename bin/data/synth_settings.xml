@@ -12,4 +12,19 @@
 	<hit_gain>0.5865</hit_gain>
 	<minMass>2.75</minMass>
 	<quantize>1</quantize>
+	<attack__ms_>2</attack__ms_>
+	<partials>
+		<p0_ratio>2.88776</p0_ratio>
+		<p0_amp>0.673469</p0_amp>
+		<p0_decay>0.222902</p0_decay>
+		<p1_ratio>2.28827</p1_ratio>
+		<p1_amp>0.55</p1_amp>
+		<p1_decay>0.222902</p1_decay>
+		<p2_ratio>5.22577</p2_ratio>
+		<p2_amp>0.244898</p2_amp>
+		<p2_decay>0.915561</p2_decay>
+		<p3_ratio>4.80612</p3_ratio>
+		<p3_amp>0.18</p3_amp>
+		<p3_decay>0.203004</p3_decay>
+	</partials>
 </Synth>

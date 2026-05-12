@@ -68,13 +68,14 @@ private:
 	ofParameter<float> minMassToFire;  // 低于此质量的碰撞被忽略
 	ofParameter<bool>  audioEnabled;
 
-	// ─── Partial 结构（加性合成 4 个 inharmonic 分音）───
-	// 每个分音可独立调 ratio / amp / decay ratio（相对 P0）
-	// P0 是"基准"，默认 ratio=1, amp=1, decay ratio=1（其他相对 P0）
-	ofParameterGroup   partialsGroup;
-	ofParameter<float> pRatio[4];      // 频率倍率
-	ofParameter<float> pAmp[4];        // 振幅
-	ofParameter<float> pDecayRatio[4]; // 衰减时长 ratio（<1 = 比 P0 衰减快）
+	// ─── FM 参数（2-op：carrier + modulator）───
+	// fmRatio 在 GUI 是连续 float，使用时 snap 到 0.5 倍数
+	// fmIndex 调制深度（0 = 纯 sine，10+ = 极度金属）
+	// fmIndexDecayMs 控制亮度衰减时长（独立于 carrier 衰减 → 自然 bell envelope）
+	ofParameterGroup   fmGroup;
+	ofParameter<float> fmRatio;        // 0.5..8.0，自动 snap 到最近 0.5
+	ofParameter<float> fmIndex;        // 调制深度
+	ofParameter<float> fmIndexDecayMs; // modIndex 衰减时长（ms）
 
 	// ─── DroneLayer 状态（atomic，跨线程）───
 	std::atomic<float> a_aliveRatio   {0.0f};
@@ -98,33 +99,39 @@ private:
 	float smMeanSpeed     = 0.0f;
 	float smSpread        = 0.0f;
 
-	// ─── EventVoices（粒子触发的短促音，加性合成）───
-	// 每个 voice 有 NUM_PARTIALS 个 inharmonic 谐振分音
-	// 高分音衰减比低分音快 → 自然的"明亮起音 → 温暖余韵"曲线
-	static constexpr int NUM_PARTIALS = 4;
-	struct Partial {
-		float freq;
-		float amp;     // 当前振幅
-		float decay;   // 每 sample 衰减系数
-		float phase;
-	};
+	// ─── EventVoices（粒子触发的短促音，2-op FM 合成）───
+	// 经典 Chowning FM：carrier + modulator
+	//   output = sin(2π·f_c·t + modIndex·sin(2π·f_m·t))
+	// modIndex 随时间衰减 → 自然 bell-like "亮起音 → 温暖尾音"
 	struct EventVoice {
 		bool   active = false;
-		int    attackCounter = 0;    // 起音 ramp 计数器
-		int    attackSamples = 0;    // 起音总样本数（避免 click）
-		float  panL = 0.7f;          // 预算的 pan 系数（每 sample 用，不每次三角函数）
-		float  panR = 0.7f;
-		Partial partials[NUM_PARTIALS];
+		int    attackCounter = 0;
+		int    attackSamples = 0;
+		float  panL = 0.7f, panR = 0.7f;
+
+		// Carrier（基频，承载振幅包络）
+		float  carrierFreq  = 220.0f;
+		float  carrierPhase = 0.0f;
+		float  carrierAmp   = 0.0f;
+		float  carrierDecay = 0.999f;
+
+		// Modulator（调制 carrier 的相位）
+		float  modFreq        = 220.0f;
+		float  modPhase       = 0.0f;
+		float  modIndex       = 0.0f;     // 当前调制深度（衰减）
+		float  modIndexDecay  = 0.999f;
 	};
 	static constexpr int NUM_EVENT_VOICES = 32;
 	std::array<EventVoice, NUM_EVENT_VOICES> eventVoices;
 
 	// ─── Ring buffer 把碰撞事件从主线程传到音频线程（lock-free SPSC）───
-	// 完整 partial 结构在主线程预计算好；音频线程只 copy
+	// FM 参数全部在主线程预计算好；音频线程只 copy
 	struct TriggerEvent {
-		Partial partials[NUM_PARTIALS];   // freq, amp, decay, phase 已计算好
-		float   panL, panR;
-		int     attackSamples;
+		float carrierFreq, modFreq;
+		float carrierAmp,  carrierDecay;
+		float modIndex,    modIndexDecay;
+		float panL, panR;
+		int   attackSamples;
 	};
 	static constexpr int RING_SIZE = 256;   // 必须 2 的幂
 	static_assert((RING_SIZE & (RING_SIZE - 1)) == 0, "RING_SIZE must be power of 2");

@@ -32,21 +32,19 @@ void Synth::buildGui(ofParameterGroup& group){
 	group.add(rootFreq.set("rootFreq (Hz)",      110.0f, 55.0f, 440.0f));
 	group.add(scaleType.set("scale",             0, 0, int(SCALE_COUNT) - 1));
 
-	// ─── Partials 子组（4 个分音独立 ratio / amp / decay）───
-	// 默认值 = tubular bell ratios（金属感 bell）
-	// 想要更"温和"：把 ratio 都设成整数倍（1, 2, 3, 4）
-	// 想要更"打击"：调小高分音 amp，加快它们的 decay ratio
-	partialsGroup.setName("partials");
-	float defaultRatios[4]      = {1.0f, 2.06f, 3.18f, 4.34f};
-	float defaultAmps[4]        = {1.0f, 0.55f, 0.30f, 0.18f};
-	float defaultDecayRatios[4] = {1.0f, 0.55f, 0.35f, 0.22f};
-	for (int p = 0; p < 4; p++) {
-		std::string base = "p" + std::to_string(p);
-		partialsGroup.add(pRatio[p].set(base + " ratio",      defaultRatios[p],      0.25f, 12.0f));
-		partialsGroup.add(pAmp[p].set(  base + " amp",        defaultAmps[p],        0.0f,  1.5f));
-		partialsGroup.add(pDecayRatio[p].set(base + " decay", defaultDecayRatios[p], 0.05f, 2.0f));
-	}
-	group.add(partialsGroup);
+	// ─── FM 子组（2-op：carrier + modulator）───
+	// 一些典型 ratio 玩法：
+	//   1.0      → carrier 自我调制，方波感
+	//   2.0      → 奇数谐波（clarinet 风）
+	//   3.0/4.0  → 整数倍（bright but harmonic）
+	//   3.5/4.5  → 非整数倍（bell-like 金属）
+	//   7.0/7.5  → 经典"DX7 bell"
+	//   0.5      → 低于 carrier，sub-harmonic 感
+	fmGroup.setName("FM");
+	fmGroup.add(fmRatio.set("FM ratio",          2.0f,  0.5f, 8.0f));    // 自动 snap 到 0.5 倍数
+	fmGroup.add(fmIndex.set("FM index",          3.0f,  0.0f, 12.0f));
+	fmGroup.add(fmIndexDecayMs.set("FM idxDecay (ms)",  40.0f, 1.0f, 500.0f));
+	group.add(fmGroup);
 }
 
 //==============================================================
@@ -106,36 +104,47 @@ void Synth::triggerCollision(const Flock3D::CollisionEvent& ev){
 	// 起音 ramp（从 GUI ms 转 samples）
 	int attackSamples = std::max(1, (int)(eventAttackMs * 0.001f * sampleRate));
 
-	// ─── 主线程预计算 partial 结构（用当前 GUI 参数）───
-	// 把所有计算搬到这里，音频线程零成本 copy
+	// ─── 主线程预计算 FM 参数 ───
+	float nyquist = sampleRate * 0.45f;
+
+	// fmRatio: GUI float → snap 到最近 0.5 倍数
+	float rawRatio = fmRatio.get();
+	float snappedRatio = roundf(rawRatio * 2.0f) / 2.0f;
+	if (snappedRatio < 0.5f) snappedRatio = 0.5f;
+
+	// Carrier
+	float carrierFreq = std::min(freq, nyquist);
+
+	// Modulator
+	float modFreqRaw = freq * snappedRatio;
+	float modFreq = std::min(modFreqRaw, nyquist);
+
+	// modIndex: 用 brightness 缩放（暗色 0.3x，亮色 1.0x → 暗 = 纯 sine，亮 = 金属）
+	float modIndexScale = 0.3f + brightness * 0.7f;
+	float modIndexInit  = fmIndex.get() * modIndexScale;
+
+	// Accent 命中时也让 modIndex 增加（更明亮的重音）
+	if (ev.isAccent) modIndexInit *= 1.5f;
+
+	// modIndex 衰减（独立于 carrier）
+	float modIdxDecaySamples = fmIndexDecayMs.get() * 0.001f * sampleRate;
+	float modIndexDecay = expf(-1.0f / std::max(modIdxDecaySamples, 1.0f));
+
 	TriggerEvent te;
-	te.panL = panL;
-	te.panR = panR;
-	te.attackSamples = attackSamples;
-
-	float nyquist = sampleRate * 0.45f;   // anti-alias cap
-	for (int p = 0; p < NUM_PARTIALS; p++) {
-		// 频率：基频 × ratio，受 Nyquist 限制
-		float pFreq = freq * pRatio[p].get();
-		if (pFreq > nyquist) pFreq = nyquist;
-		te.partials[p].freq = pFreq;
-
-		// 振幅：gain × pAmp × brightness 加权（P0 不受 brightness 影响）
-		float ampScale = (p == 0) ? 1.0f : brightness;
-		te.partials[p].amp = gain * pAmp[p].get() * ampScale;
-
-		// 衰减：baseDecay^(1/decayRatio) — ratio<1 → 衰减更快
-		float dr = std::max(pDecayRatio[p].get(), 0.001f);
-		te.partials[p].decay = powf(baseDecay, 1.0f / dr);
-
-		// 错开初相位防触发瞬间 in-phase 堆积
-		te.partials[p].phase = (float)p * 0.123f;
-	}
+	te.carrierFreq     = carrierFreq;
+	te.modFreq         = modFreq;
+	te.carrierAmp      = gain;
+	te.carrierDecay    = baseDecay;
+	te.modIndex        = modIndexInit;
+	te.modIndexDecay   = modIndexDecay;
+	te.panL            = panL;
+	te.panR            = panR;
+	te.attackSamples   = attackSamples;
 
 	int w = ringWrite.load(std::memory_order_relaxed);
 	int next = (w + 1) & (RING_SIZE - 1);
 	if (next == ringRead.load(std::memory_order_acquire)) {
-		return;   // ring 满 → 丢
+		return;
 	}
 	eventRing[w] = te;
 	ringWrite.store(next, std::memory_order_release);
@@ -190,33 +199,38 @@ void Synth::audioOut(ofSoundBuffer& buffer){
 	float evtVol = eventVol;
 
 	// ─── 把 ring buffer 里的 trigger event 分配给空闲 event voices ───
-	// Partial 数据已在主线程预计算好，这里只 copy（无 GUI 读取）
 	int r = ringRead.load(std::memory_order_relaxed);
 	int wEnd = ringWrite.load(std::memory_order_acquire);
 	while (r != wEnd) {
 		const TriggerEvent& te = eventRing[r];
 
-		// 找空闲 voice，或偷 P0 amp 最小的
+		// 找空闲 voice，或偷 carrier amp 最小的
 		int targetIdx = -1;
 		float minAmp = 1e9;
 		for (int i = 0; i < NUM_EVENT_VOICES; i++) {
 			if (!eventVoices[i].active) { targetIdx = i; break; }
-			if (eventVoices[i].partials[0].amp < minAmp) {
-				minAmp = eventVoices[i].partials[0].amp;
+			if (eventVoices[i].carrierAmp < minAmp) {
+				minAmp = eventVoices[i].carrierAmp;
 				targetIdx = i;
 			}
 		}
 		if (targetIdx >= 0) {
 			auto& v = eventVoices[targetIdx];
-			v.active        = true;
-			v.attackCounter = 0;
-			v.attackSamples = te.attackSamples;
-			v.panL          = te.panL;
-			v.panR          = te.panR;
-			// 直接 copy 主线程算好的 partial 结构
-			for (int p = 0; p < NUM_PARTIALS; p++) {
-				v.partials[p] = te.partials[p];
-			}
+			v.active         = true;
+			v.attackCounter  = 0;
+			v.attackSamples  = te.attackSamples;
+			v.panL           = te.panL;
+			v.panR           = te.panR;
+
+			v.carrierFreq    = te.carrierFreq;
+			v.carrierPhase   = 0.0f;
+			v.carrierAmp     = te.carrierAmp;
+			v.carrierDecay   = te.carrierDecay;
+
+			v.modFreq        = te.modFreq;
+			v.modPhase       = 0.123f;     // 错开避免 click
+			v.modIndex       = te.modIndex;
+			v.modIndexDecay  = te.modIndexDecay;
 		}
 		r = (r + 1) & (RING_SIZE - 1);
 	}
@@ -252,45 +266,41 @@ void Synth::audioOut(ofSoundBuffer& buffer){
 		right += droneOut * 0.5f;
 
 		// ───────────────────────────────
-		// B. EventVoices — 短促粒子触发声（加性合成 4 inharmonic partials）
-		//   - attack envelope (~2ms) 防起音 click
-		//   - 各分音独立衰减：高分音快，低分音慢 → 自然"亮起音→温暖余韵"
+		// B. EventVoices — 短促粒子触发声（2-op FM 合成）
+		//   carrier 承载振幅包络，modulator 调制 carrier 相位
+		//   modIndex 独立衰减 → 自然 bell envelope（亮起音 → 温暖尾音）
 		// ───────────────────────────────
 		float eventSumL = 0, eventSumR = 0;
 		for (int v = 0; v < NUM_EVENT_VOICES; v++) {
 			auto& vc = eventVoices[v];
 			if (!vc.active) continue;
 
-			// Attack envelope：线性 ramp 起音
+			// Attack envelope（防起音 click）
 			float envAttack = 1.0f;
 			if (vc.attackCounter < vc.attackSamples) {
 				envAttack = (float)vc.attackCounter / (float)vc.attackSamples;
 				vc.attackCounter++;
 			}
 
-			// 累加各分音
-			float voiceSample = 0;
-			bool anyAlive = false;
-			for (int p = 0; p < NUM_PARTIALS; p++) {
-				auto& pt = vc.partials[p];
-				if (pt.amp < 0.00001f) continue;
+			// Modulator
+			float modSample = sinf(vc.modPhase * TWO_PI) * vc.modIndex;
+			vc.modPhase += vc.modFreq / sampleRate;
+			if (vc.modPhase >= 1.0f) vc.modPhase -= 1.0f;
+			vc.modIndex *= vc.modIndexDecay;
 
-				voiceSample += sinf(pt.phase * TWO_PI) * pt.amp;
+			// Carrier with phase modulation
+			float voiceSample = sinf(vc.carrierPhase * TWO_PI + modSample) * vc.carrierAmp;
+			vc.carrierPhase += vc.carrierFreq / sampleRate;
+			if (vc.carrierPhase >= 1.0f) vc.carrierPhase -= 1.0f;
+			vc.carrierAmp *= vc.carrierDecay;
 
-				pt.phase += pt.freq / sampleRate;
-				if (pt.phase >= 1.0f) pt.phase -= 1.0f;
-				pt.amp *= pt.decay;
-				anyAlive = true;
-			}
-
-			if (!anyAlive) {
+			if (vc.carrierAmp < 0.00001f) {
 				vc.active = false;
 				continue;
 			}
 
 			voiceSample *= envAttack;
 
-			// 预算的 pan 系数（无三角函数 / sample）
 			eventSumL += voiceSample * vc.panL;
 			eventSumR += voiceSample * vc.panR;
 		}
