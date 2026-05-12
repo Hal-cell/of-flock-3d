@@ -1,0 +1,23 @@
+# Build artifacts
+bin/*.app/
+bin/of-flock-3d
+obj/
+*.dSYM/
+
+# Xcode user state (per-user, not shared)
+of-flock-3d.xcodeproj/xcuserdata/
+of-flock-3d.xcodeproj/project.xcworkspace/xcuserdata/
+
+# Backup files
+*.bak
+*.bak[0-9]*
+
+# macOS
+.DS_Store
+
+# Runtime artifacts that get big
+bin/data/recording_*.png
+bin/data/snapshot_*.png
+
+# Settings xml is per-user — exclude so repo stays clean
+# bin/data/settings.xml
