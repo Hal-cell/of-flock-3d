@@ -182,10 +182,11 @@ private:
 	ofParameter<float> accentChance;    // 0..1，每次 merge 命中的概率
 	ofParameter<float> accentSizeMul;   // accent flash 的 size 倍率
 
-	// ─── Cluster detection（一个滑块控制全部）───
-	// sensitivity 0 = 严格（只检测明显大密集），1 = 宽松（小聚集就算）
-	// 内部自动派生 cell 密度阈值 + cluster 总粒子数阈值，并按粒子总数自适应
-	ofParameter<float> clusterSensitivity;
+	// ─── Cluster detection（两个直观参数）───
+	// 把世界切成 gridRes³ 个 cell，每 cell 内"闪烁粒子"数 ≥ minFlash → cluster
+	// 只数闪烁粒子（merge 后的 winner）— 它们直接对应活跃聚集中心
+	ofParameter<int>   clusterGridRes;   // 3..10：每边 cell 数
+	ofParameter<int>   clusterMinFlash;  // 1..100：cell 内最少几个闪烁粒子算 cluster
 
 	// ─── Trail（光束尾巴）───
 	// 长度 = baseTailLen × (0.5 + audioInfluence × tailAudioSensitivity × 1.5)

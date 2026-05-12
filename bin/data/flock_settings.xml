@@ -3,7 +3,7 @@
 	<particles>17195</particles>
 	<world_radius>250</world_radius>
 	<alpha>0.6</alpha>
-	<autoRotate>1</autoRotate>
+	<autoRotate>0</autoRotate>
 	<show_axis>0</show_axis>
 	<hueBase>0.55</hueBase>
 	<hueRange>0.2</hueRange>

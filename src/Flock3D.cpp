@@ -55,10 +55,12 @@ void Flock3D::buildGui(ofParameterGroup& group) {
 	group.add(accentChance.set("accent chance",  0.1f, 0.0f, 1.0f));      // 10% 默认
 	group.add(accentSizeMul.set("accent size",   2.5f, 1.0f, 5.0f));      // 普通的 2.5 倍 size
 
-	// ─── Cluster detection（单一 sensitivity 滑块）───
-	// 0 = 严格（只检测大密集团）→ 1 = 宽松（小聚集就算）
-	// 内部自动按 alive 粒子数派生 cell 密度阈值（避免误检）
-	group.add(clusterSensitivity.set("cluster sensitivity", 0.4f, 0.0f, 1.0f));
+	// ─── Cluster detection（两个直观参数）───
+	// gridRes：世界切成 gridRes³ 个 cell（5 = 125 cells，cell ~100u 在默认 world）
+	// minFlash：cell 内"正在闪烁"（刚 merge 完）的粒子数 ≥ 此值 → cluster
+	// 只数闪烁粒子 → 直接锁定 merge 活跃区
+	group.add(clusterGridRes.set("cluster grid",      5,   3,   10));
+	group.add(clusterMinFlash.set("cluster minFlash", 5,   1,   100));
 
 	// ─── Trail（光束尾巴）───
 	// length = baseLen × (0.5 + audio_influence × sensitivity × 1.5)
@@ -623,14 +625,19 @@ Flock3D::Stats Flock3D::getStats() const {
 }
 
 //--------------------------------------------------------------
-//  Cluster detection（极简版：grid 分区 + 每 cell 阈值）
-//  - 世界切成 5×5×5 = 125 个 cell
-//  - 每 cell 数粒子
-//  - 超过阈值的 cell 就是一个 cluster（不合并，每个独立）
-//  - 阈值 = avg × (5 - sens × 3.5)：sens=0 → 5x avg；sens=1 → 1.5x avg
+//  Cluster detection（极简版：只数闪烁粒子 + 直接阈值）
+//  - 世界切成 gridRes³ 个 cell（GUI 控制）
+//  - 只数"正在闪烁"的粒子（flashTimer > 0，刚 merge 后几帧内）
+//  - cell 内闪烁粒子数 ≥ minFlash → 该 cell 是一个 cluster
+//
+//  为什么只数闪烁粒子：
+//    - 闪烁 = 刚发生 merge → 直接指示"聚集活跃区"
+//    - 排除背景均匀分布的干扰 → 信噪比极高
+//    - 数量少（merge 多时几百，一般几十）→ 简单阈值就清晰
 //--------------------------------------------------------------
 std::vector<Flock3D::Cluster> Flock3D::getClusters(int maxK) const {
-	const int gridRes = 5;   // 5³ = 125 cells，cell 大约 100 单位 @ 默认 world
+	int gridRes = clusterGridRes;
+	if (gridRes < 2) gridRes = 2;
 	int totalCells = gridRes * gridRes * gridRes;
 
 	struct Cell {
@@ -645,12 +652,11 @@ std::vector<Flock3D::Cluster> Flock3D::getClusters(int maxK) const {
 	float wr = worldRadius.get();
 	float invScale = (float)gridRes / (wr * 2.0f);
 
-	// 步骤 1：粒子分桶 + 统计 alive 数（用于动态阈值）
-	int aliveCount = 0;
+	// 只数闪烁粒子（merge 完后 flashTimer > 0 的）
 	for (const auto& p : particles) {
 		if (!p.alive) continue;
 		if (p.fadeOutTimer >= 0) continue;
-		aliveCount++;
+		if (p.flashTimer <= 0) continue;   // ← 关键：只数闪烁
 
 		int ix = (int)((p.pos.x + wr) * invScale);
 		int iy = (int)((p.pos.y + wr) * invScale);
@@ -670,13 +676,7 @@ std::vector<Flock3D::Cluster> Flock3D::getClusters(int maxK) const {
 		cell.colB += p.color.b;
 	}
 
-	// 阈值：avg × ratio
-	//   sens=0 严格：5x avg（cell 要明显比均匀密 5 倍才算）
-	//   sens=1 宽松：1.5x avg（仅 1.5 倍即算）
-	float sens = ofClamp(clusterSensitivity.get(), 0.0f, 1.0f);
-	float ratio = 5.0f - sens * 3.5f;
-	float avgDensity = (totalCells > 0) ? (float)aliveCount / (float)totalCells : 0.0f;
-	int   cellThreshold = std::max(2, (int)(avgDensity * ratio));
+	int cellThreshold = std::max(1, (int)clusterMinFlash);
 
 	// 每个超阈 cell 直接成为一个 cluster（不合并、不 BFS）
 	std::vector<Cluster> clusters;
