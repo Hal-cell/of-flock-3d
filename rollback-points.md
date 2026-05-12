@@ -513,3 +513,43 @@ effectiveCellDensity = max(2, avgDensity × densityRatio)
 - 加 cluster 跟踪稳定性（匹配前后帧的同一 cluster）
 - velocity reconstruction（从前后帧 centroid 漂移算 velocity）
 - 多尺度碰撞热点（小区域 + 大区域分别检测）
+
+## rp-18 — DBSCAN cluster detection (solves moving cluster problem)
+
+**Commit**: `git tag rp-18-dbscan-cluster` → `eb29beb`
+
+**Pivot**: 完全弃用 grid-based 历史算法，改用经典 DBSCAN。
+
+**根本问题**: 之前两个算法（粒子密度 rp-15/16、碰撞热点 rp-17）都假设 cluster 静止。
+但 cluster 在持续移动 → 证据被涂抹到多个 grid cell → 检测失败。
+
+**DBSCAN 思路**: 每帧独立检测，看**当前粒子位置**。
+1. spatial hash 当前粒子到 3D grid（cell ≈ radius 大小）
+2. 对每粒子，数半径 R 内邻居（搜 3×3×3 cells）
+3. 邻居 ≥ minNeighbors → "核心点"
+4. BFS 通过近邻把核心点连成 cluster（核心扩展，边界吸收但不扩展）
+5. 总粒子数 ≥ minCount 才有效
+
+**为什么解决移动问题**:
+- 不维护历史，cluster 怎么飞都不影响
+- 整团粒子在当前帧始终空间紧邻 → 始终被识别
+
+**为什么解决误报**:
+- 阈值是**每粒子的邻居数**（绝对值）
+- 20K 均匀分布在半径 250 球内：每粒子 ~5-7 邻居（半径 25 内）
+- 真聚集时每粒子 30+ 邻居
+- 阈值 12 → 干净区分
+
+**新 GUI**:
+| 参数 | 范围 | 默认 |
+|---|---|---|
+| `cluster radius` | 5..100 | 25 |
+| `cluster minNeighbors` | 3..50 | 12 |
+| `cluster minCount` | 5..300 | 30 |
+
+**性能**: 20K 粒子 ~5ms/frame（spatial hash + BFS），可接受。
+
+**Use this checkpoint to**:
+- 加 cluster 跟踪稳定性（前后帧匹配 + 平滑 centroid）
+- 多半径检测（小 cluster 和大 cluster 分别）
+- 加 GUI 显示当前核心点 / 边界点数（调试）
