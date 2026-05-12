@@ -111,15 +111,6 @@ private:
 
 	std::vector<Particle> particles;
 	std::vector<CollisionEvent> collisionsThisFrame;   // 每帧清空，update 内累积
-
-	// 碰撞历史滑动窗口（cluster 检测用）
-	struct CollisionRecord {
-		glm::vec3    pos;
-		float        mass;
-		ofFloatColor color;
-		int          frameAge;   // 0=本帧；老的逐帧 ++
-	};
-	std::vector<CollisionRecord> collisionHistory;
 	ofEasyCam cam;
 	ofShader  particleShader;
 
@@ -179,14 +170,12 @@ private:
 	ofParameter<float> accentChance;    // 0..1，每次 merge 命中的概率
 	ofParameter<float> accentSizeMul;   // accent flash 的 size 倍率
 
-	// ─── Cluster detection（基于碰撞热点的检测）───
-	// 思路：collision events 出现在小区域内频繁 = 粒子真在挤压聚集
-	// 维护 N 帧滑动窗口的碰撞历史，按位置 spatial hash
-	// 热点 cell（hits ≥ minHitsPerCell）BFS 合并后总 hits ≥ minTotalHits → cluster
-	ofParameter<int>   clusterGridRes;        // 3D grid 分辨率
-	ofParameter<int>   collisionWindowFrames; // 碰撞历史窗口（帧数；60 ≈ 1 秒）
-	ofParameter<int>   minHitsPerCell;        // cell 内最少多少次碰撞算"热点"
-	ofParameter<int>   clusterMinCount;       // 整个 cluster 累计碰撞次数下限
+	// ─── Cluster detection（DBSCAN 风格：每帧独立，看当前粒子邻居密度）───
+	// 思路：每帧对每个粒子查半径 R 内的邻居数；够多 → 核心点
+	// BFS 把相邻核心点连成 cluster；不维护历史，cluster 移动也能稳定识别
+	ofParameter<float> clusterRadius;       // 邻居搜索半径（世界单位）
+	ofParameter<int>   clusterMinNeighbors; // 核心点的邻居数下限（DBSCAN minPts）
+	ofParameter<int>   clusterMinCount;     // 整个 cluster 至少多少粒子才算成立
 
 	// ─── Trail（光束尾巴）───
 	// 长度 = baseTailLen × (0.5 + audioInfluence × tailAudioSensitivity × 1.5)

@@ -5,7 +5,7 @@
 	<alpha>0.6</alpha>
 	<autoRotate>0</autoRotate>
 	<show_axis>0</show_axis>
-	<hueBase>0.55</hueBase>
+	<hueBase>0.60675</hueBase>
 	<hueRange>0.2</hueRange>
 	<brightness>1</brightness>
 	<noise_amp>126</noise_amp>
@@ -18,8 +18,8 @@
 	<repeller_amp>52</repeller_amp>
 	<flock_sep>0.6</flock_sep>
 	<flock_coh>20</flock_coh>
-	<coh_speed>0.345</coh_speed>
-	<flock_nbrR>261.268</flock_nbrR>
+	<coh_speed>0.170996</coh_speed>
+	<flock_nbrR>79.027</flock_nbrR>
 	<merge_dist>6</merge_dist>
 	<spawn_rate>40000</spawn_rate>
 	<min_alive>0.89</min_alive>
@@ -35,12 +35,15 @@
 	<flash_intensity>2</flash_intensity>
 	<accent_chance>0.037625</accent_chance>
 	<accent_size>2.48</accent_size>
-	<cluster_grid>10</cluster_grid>
+	<cluster_grid>4</cluster_grid>
 	<cluster_minMass>330.744</cluster_minMass>
 	<cluster_minCount>10</cluster_minCount>
 	<cluster_cellDensity>2</cluster_cellDensity>
-	<tail_length>7</tail_length>
-	<tail_audio_sens>1</tail_audio_sens>
-	<tail_alpha>0.45</tail_alpha>
+	<tail_length>0</tail_length>
+	<tail_audio_sens>1.03398</tail_audio_sens>
+	<tail_alpha>0.816992</tail_alpha>
 	<cluster_density_ratio>3.53386</cluster_density_ratio>
+	<collision_window>167</collision_window>
+	<min_hits_per_cell>12</min_hits_per_cell>
+	<cluster_min_hits>15</cluster_min_hits>
 </Flock_3D>

@@ -55,13 +55,12 @@ void Flock3D::buildGui(ofParameterGroup& group) {
 	group.add(accentChance.set("accent chance",  0.1f, 0.0f, 1.0f));      // 10% 默认
 	group.add(accentSizeMul.set("accent size",   2.5f, 1.0f, 5.0f));      // 普通的 2.5 倍 size
 
-	// ─── Cluster detection（碰撞热点：碰撞集中在小区域 → cluster）───
-	// 维护 N 帧滑动窗口的碰撞历史，按位置 spatial hash
-	// 热点 cell（≥ minHitsPerCell 次碰撞）BFS 合并 → 总碰撞 ≥ minTotalHits 算 cluster
-	group.add(clusterGridRes.set("cluster grid",         16,    4,    32));
-	group.add(collisionWindowFrames.set("collision window",  60,  10,  300));
-	group.add(minHitsPerCell.set("min hits per cell",     3,   1,   50));
-	group.add(clusterMinCount.set("cluster min hits",     8,   2,   200));
+	// ─── Cluster detection（DBSCAN 风格：当前帧粒子邻居密度）───
+	// 每帧独立检测，不维护历史，cluster 移动不影响识别
+	// 算法：对每粒子查半径 R 内邻居数 → ≥ minNeighbors 算核心点 → BFS 连接相邻核心点
+	group.add(clusterRadius.set("cluster radius",         25.0f, 5.0f, 100.0f));
+	group.add(clusterMinNeighbors.set("cluster minNeighbors", 12,   3,    50));
+	group.add(clusterMinCount.set("cluster minCount",      30,   5,    300));
 
 	// ─── Trail（光束尾巴）───
 	// length = baseLen × (0.5 + audio_influence × sensitivity × 1.5)
@@ -393,20 +392,6 @@ void Flock3D::update(){
 		p.trailWriteIdx = (p.trailWriteIdx + 1) % TRAIL_MAX;
 		if (p.trailCount < TRAIL_MAX) p.trailCount++;
 	}
-
-	// ─── 6. Collision history（cluster 检测用）───
-	// 把本帧碰撞推入历史，旧的 age++，超出 window 的删除
-	int window = collisionWindowFrames;
-	for (auto& r : collisionHistory) r.frameAge++;
-	collisionHistory.erase(
-		std::remove_if(collisionHistory.begin(), collisionHistory.end(),
-			[window](const CollisionRecord& r){ return r.frameAge > window; }),
-		collisionHistory.end()
-	);
-	// 把本帧的 collision events 加入历史（age=0）
-	for (const auto& ev : collisionsThisFrame) {
-		collisionHistory.push_back({ev.pos, ev.newMass, ev.color, 0});
-	}
 }
 
 //==============================================================
@@ -640,132 +625,161 @@ Flock3D::Stats Flock3D::getStats() const {
 }
 
 //--------------------------------------------------------------
-//  Cluster detection（基于碰撞热点）
-//  - 把 collisionHistory 按位置分桶到 3D grid
-//  - 找"热点 cell"（hits ≥ minHitsPerCell）
-//  - BFS 合并相邻热点
-//  - 总 hits ≥ minTotalHits 才算 cluster
-//
-//  优点：碰撞只在真聚集时频繁出现 → 没聚集 = 没碰撞 = 没 cluster
-//        与粒子总数无关，自然过滤掉均匀分布的"假阳性"
+//  Cluster detection (DBSCAN 风格)
+//  - 每帧独立，看当前粒子位置 → 不受 cluster 移动影响
+//  - 算法：
+//      1. spatial hash 所有活粒子到 3D grid（cell size ≈ radius）
+//      2. 对每粒子，统计半径 R 内邻居数（搜索 3×3×3 cells）
+//      3. 邻居 ≥ minNeighbors 的粒子 = "核心点"
+//      4. BFS 通过近邻把核心点连成 cluster
+//      5. 总粒子数 ≥ minCount 的 cluster 才有效
 //--------------------------------------------------------------
 std::vector<Flock3D::Cluster> Flock3D::getClusters(int maxK) const {
-	int gridRes = clusterGridRes;
-	if (gridRes < 2) gridRes = 2;
-	int totalCells = gridRes * gridRes * gridRes;
-
-	struct Cell {
-		int   hits = 0;
-		float massSum = 0.0f;
-		glm::vec3 posSum{0};
-		float colR = 0, colG = 0, colB = 0;
-	};
-	std::vector<Cell> grid(totalCells);
+	int n = (int)particles.size();
+	if (n == 0) return {};
 
 	float wr = worldRadius.get();
+	float radius = clusterRadius;
+	float radiusSq = radius * radius;
+	int   minNbrs = clusterMinNeighbors;
+	int   minSize = clusterMinCount;
+
+	// Grid 自动按半径选大小，3×3×3 cells 覆盖搜索区
+	int gridRes = std::max(4, std::min(40, (int)((wr * 2.0f) / radius)));
+	int totalCells = gridRes * gridRes * gridRes;
 	float invScale = (float)gridRes / (wr * 2.0f);
 
-	// 步骤 1：把所有碰撞事件分桶
-	for (const auto& r : collisionHistory) {
-		int ix = (int)((r.pos.x + wr) * invScale);
-		int iy = (int)((r.pos.y + wr) * invScale);
-		int iz = (int)((r.pos.z + wr) * invScale);
-		if (ix < 0 || ix >= gridRes) continue;
-		if (iy < 0 || iy >= gridRes) continue;
-		if (iz < 0 || iz >= gridRes) continue;
+	// Step 1: spatial hash（cell idx → particle index 列表）
+	std::vector<std::vector<int>> grid(totalCells);
+	std::vector<int> particleCell(n, -1);
+
+	for (int i = 0; i < n; i++) {
+		const auto& p = particles[i];
+		if (!p.alive) continue;
+		if (p.fadeOutTimer >= 0) continue;
+
+		int ix = (int)((p.pos.x + wr) * invScale);
+		int iy = (int)((p.pos.y + wr) * invScale);
+		int iz = (int)((p.pos.z + wr) * invScale);
+		if (ix < 0) ix = 0; if (ix >= gridRes) ix = gridRes - 1;
+		if (iy < 0) iy = 0; if (iy >= gridRes) iy = gridRes - 1;
+		if (iz < 0) iz = 0; if (iz >= gridRes) iz = gridRes - 1;
 
 		int idx = ix + iy * gridRes + iz * gridRes * gridRes;
-		Cell& cell = grid[idx];
-		cell.hits++;
-		cell.massSum += r.mass;
-		cell.posSum += r.pos;
-		cell.colR += r.color.r;
-		cell.colG += r.color.g;
-		cell.colB += r.color.b;
+		grid[idx].push_back(i);
+		particleCell[i] = idx;
 	}
 
-	int minPerCell = std::max(1, (int)minHitsPerCell);
-	int minTotal   = std::max(1, (int)clusterMinCount);
+	// Helper: 收集粒子 i 半径内的所有邻居索引（搜 3×3×3 邻接 cells）
+	auto collectNeighbors = [&](int i, std::vector<int>& out) {
+		out.clear();
+		int cellIdx = particleCell[i];
+		if (cellIdx < 0) return;
+		const auto& p = particles[i];
+		int cz = cellIdx / (gridRes * gridRes);
+		int cy = (cellIdx / gridRes) % gridRes;
+		int cx = cellIdx % gridRes;
 
-	// 步骤 2-3：BFS 合并相邻密集 cell
-	std::vector<bool> visited(totalCells, false);
+		for (int dz = -1; dz <= 1; dz++)
+		for (int dy = -1; dy <= 1; dy++)
+		for (int dx = -1; dx <= 1; dx++) {
+			int nx = cx + dx, ny = cy + dy, nz = cz + dz;
+			if (nx < 0 || nx >= gridRes) continue;
+			if (ny < 0 || ny >= gridRes) continue;
+			if (nz < 0 || nz >= gridRes) continue;
+			int nIdx = nx + ny * gridRes + nz * gridRes * gridRes;
+			for (int j : grid[nIdx]) {
+				if (j == i) continue;
+				glm::vec3 diff = particles[j].pos - p.pos;
+				if (glm::dot(diff, diff) < radiusSq) {
+					out.push_back(j);
+				}
+			}
+		}
+	};
+
+	// Step 2-3: 标记"核心点"（neighbors ≥ minNbrs）
+	std::vector<bool> isCore(n, false);
+	std::vector<int> tmpNbrs;
+	tmpNbrs.reserve(64);
+
+	for (int i = 0; i < n; i++) {
+		if (particleCell[i] < 0) continue;
+		collectNeighbors(i, tmpNbrs);
+		if ((int)tmpNbrs.size() >= minNbrs) isCore[i] = true;
+	}
+
+	// Step 4: BFS — 从每个未分配的核心点扩展 cluster
+	std::vector<int> particleCluster(n, -1);
+	std::vector<int> bfsStack;
+	bfsStack.reserve(256);
+
 	std::vector<Cluster> clusters;
 	clusters.reserve(maxK + 4);
 
-	auto cellIdx3 = [gridRes](int x, int y, int z) {
-		return x + y * gridRes + z * gridRes * gridRes;
-	};
+	for (int seed = 0; seed < n; seed++) {
+		if (!isCore[seed]) continue;
+		if (particleCluster[seed] >= 0) continue;
 
-	for (int z = 0; z < gridRes; z++) {
-		for (int y = 0; y < gridRes; y++) {
-			for (int x = 0; x < gridRes; x++) {
-				int idx = cellIdx3(x, y, z);
-				if (visited[idx]) continue;
-				if (grid[idx].hits < minPerCell) continue;
+		// 新 cluster：从 seed 出发 BFS
+		int curClusterId = (int)clusters.size();
+		particleCluster[seed] = curClusterId;
+		bfsStack.clear();
+		bfsStack.push_back(seed);
 
-				// BFS：种子是 hits ≥ minPerCell 的 cell，扩展到邻接热点
-				int      sumHits = 0;
-				float    sumMass = 0;
-				glm::vec3 sumPos(0);
-				float    sumR = 0, sumG = 0, sumB = 0;
+		glm::vec3 sumPos(0), sumVel(0);
+		float sumMass = 0;
+		float sumR = 0, sumG = 0, sumB = 0;
+		int sumCount = 0;
 
-				std::vector<int> stack;
-				stack.reserve(32);
-				stack.push_back(idx);
-				visited[idx] = true;
+		while (!bfsStack.empty()) {
+			int curIdx = bfsStack.back();
+			bfsStack.pop_back();
 
-				while (!stack.empty()) {
-					int curIdx = stack.back();
-					stack.pop_back();
+			const auto& p = particles[curIdx];
+			sumPos  += p.pos;
+			sumVel  += p.velocity;
+			sumMass += p.mass;
+			sumR    += p.color.r;
+			sumG    += p.color.g;
+			sumB    += p.color.b;
+			sumCount++;
 
-					const Cell& cell = grid[curIdx];
-					sumHits += cell.hits;
-					sumMass += cell.massSum;
-					sumPos  += cell.posSum;
-					sumR    += cell.colR;
-					sumG    += cell.colG;
-					sumB    += cell.colB;
-
-					int cz = curIdx / (gridRes * gridRes);
-					int cy = (curIdx / gridRes) % gridRes;
-					int cx = curIdx % gridRes;
-
-					int neighbors[6][3] = {
-						{cx-1, cy, cz}, {cx+1, cy, cz},
-						{cx, cy-1, cz}, {cx, cy+1, cz},
-						{cx, cy, cz-1}, {cx, cy, cz+1}
-					};
-					for (int n = 0; n < 6; n++) {
-						int nx = neighbors[n][0];
-						int ny = neighbors[n][1];
-						int nz = neighbors[n][2];
-						if (nx < 0 || nx >= gridRes) continue;
-						if (ny < 0 || ny >= gridRes) continue;
-						if (nz < 0 || nz >= gridRes) continue;
-						int nIdx = cellIdx3(nx, ny, nz);
-						if (visited[nIdx]) continue;
-						// 邻居只要"半热点"就并入（让 cluster 更稳定）
-						if (grid[nIdx].hits < std::max(1, minPerCell / 2)) continue;
-						visited[nIdx] = true;
-						stack.push_back(nIdx);
-					}
+			// 扩展到所有未分配的邻居（核心点 + 边界粒子都吸收）
+			collectNeighbors(curIdx, tmpNbrs);
+			for (int j : tmpNbrs) {
+				if (particleCluster[j] >= 0) continue;
+				particleCluster[j] = curClusterId;
+				// 只有核心点继续扩展（DBSCAN 经典做法 — 边界粒子不扩展）
+				if (isCore[j]) bfsStack.push_back(j);
+				else {
+					// 边界粒子加入统计但不扩展
+					const auto& pj = particles[j];
+					sumPos  += pj.pos;
+					sumVel  += pj.velocity;
+					sumMass += pj.mass;
+					sumR    += pj.color.r;
+					sumG    += pj.color.g;
+					sumB    += pj.color.b;
+					sumCount++;
 				}
-
-				// 总 hits 不够 → 不算 cluster
-				if (sumHits < minTotal) continue;
-
-				Cluster c;
-				c.particleCount = sumHits;        // 复用：现在表示"累计碰撞次数"
-				c.totalMass     = sumMass;
-				float invN = 1.0f / (float)sumHits;
-				c.centroid  = sumPos * invN;
-				c.velocity  = glm::vec3(0);        // 碰撞历史不带 velocity
-				c.avgColor  = ofFloatColor(sumR * invN, sumG * invN, sumB * invN, 1.0f);
-				clusters.push_back(c);
 			}
 		}
+
+		// 总粒子数太少 → 不算 cluster
+		if (sumCount < minSize) continue;
+
+		Cluster c;
+		c.particleCount = sumCount;
+		c.totalMass     = sumMass;
+		float invN = 1.0f / (float)sumCount;
+		c.centroid = sumPos * invN;
+		c.velocity = sumVel * invN;
+		c.avgColor = ofFloatColor(sumR * invN, sumG * invN, sumB * invN, 1.0f);
+		clusters.push_back(c);
 	}
 
+	// 按质量降序，取 top-K
 	std::sort(clusters.begin(), clusters.end(),
 		[](const Cluster& a, const Cluster& b){ return a.totalMass > b.totalMass; });
 	if ((int)clusters.size() > maxK) clusters.resize(maxK);
