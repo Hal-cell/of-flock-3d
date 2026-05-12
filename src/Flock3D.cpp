@@ -649,9 +649,17 @@ std::vector<Flock3D::Cluster> Flock3D::getClusters(int maxK) const {
 	int totalCells = gridRes * gridRes * gridRes;
 	float invScale = (float)gridRes / (wr * 2.0f);
 
-	// Step 1: spatial hash（cell idx → particle index 列表）
-	std::vector<std::vector<int>> grid(totalCells);
-	std::vector<int> particleCell(n, -1);
+	// Step 1: spatial hash — 用复用 buffer（避免每帧 heap alloc）
+	if ((int)clusterGrid.size() != totalCells) {
+		clusterGrid.resize(totalCells);
+	}
+	for (auto& cell : clusterGrid) cell.clear();   // 保留 capacity
+
+	if ((int)particleCellCache.size() != n) {
+		particleCellCache.assign(n, -1);
+	} else {
+		std::fill(particleCellCache.begin(), particleCellCache.end(), -1);
+	}
 
 	for (int i = 0; i < n; i++) {
 		const auto& p = particles[i];
@@ -666,14 +674,14 @@ std::vector<Flock3D::Cluster> Flock3D::getClusters(int maxK) const {
 		if (iz < 0) iz = 0; if (iz >= gridRes) iz = gridRes - 1;
 
 		int idx = ix + iy * gridRes + iz * gridRes * gridRes;
-		grid[idx].push_back(i);
-		particleCell[i] = idx;
+		clusterGrid[idx].push_back(i);
+		particleCellCache[i] = idx;
 	}
 
 	// Helper: 收集粒子 i 半径内的所有邻居索引（搜 3×3×3 邻接 cells）
 	auto collectNeighbors = [&](int i, std::vector<int>& out) {
 		out.clear();
-		int cellIdx = particleCell[i];
+		int cellIdx = particleCellCache[i];
 		if (cellIdx < 0) return;
 		const auto& p = particles[i];
 		int cz = cellIdx / (gridRes * gridRes);
@@ -688,7 +696,7 @@ std::vector<Flock3D::Cluster> Flock3D::getClusters(int maxK) const {
 			if (ny < 0 || ny >= gridRes) continue;
 			if (nz < 0 || nz >= gridRes) continue;
 			int nIdx = nx + ny * gridRes + nz * gridRes * gridRes;
-			for (int j : grid[nIdx]) {
+			for (int j : clusterGrid[nIdx]) {
 				if (j == i) continue;
 				glm::vec3 diff = particles[j].pos - p.pos;
 				if (glm::dot(diff, diff) < radiusSq) {
@@ -698,43 +706,51 @@ std::vector<Flock3D::Cluster> Flock3D::getClusters(int maxK) const {
 		}
 	};
 
-	// Step 2-3: 标记"核心点"（neighbors ≥ minNbrs）
-	std::vector<bool> isCore(n, false);
-	std::vector<int> tmpNbrs;
-	tmpNbrs.reserve(64);
+	// Step 2-3: 标记"核心点"（neighbors ≥ minNbrs）— 复用 buffer
+	if ((int)isCoreCache.size() != n) {
+		isCoreCache.assign(n, 0);
+	} else {
+		std::fill(isCoreCache.begin(), isCoreCache.end(), 0);
+	}
+	tmpNbrsCache.clear();
+	tmpNbrsCache.reserve(128);
 
 	for (int i = 0; i < n; i++) {
-		if (particleCell[i] < 0) continue;
-		collectNeighbors(i, tmpNbrs);
-		if ((int)tmpNbrs.size() >= minNbrs) isCore[i] = true;
+		if (particleCellCache[i] < 0) continue;
+		collectNeighbors(i, tmpNbrsCache);
+		if ((int)tmpNbrsCache.size() >= minNbrs) isCoreCache[i] = 1;
 	}
 
-	// Step 4: BFS — 从每个未分配的核心点扩展 cluster
-	std::vector<int> particleCluster(n, -1);
-	std::vector<int> bfsStack;
-	bfsStack.reserve(256);
+	// Step 4: BFS — 从每个未分配的核心点扩展 cluster（复用 buffer）
+	if ((int)particleClusterCache.size() != n) {
+		particleClusterCache.assign(n, -1);
+	} else {
+		std::fill(particleClusterCache.begin(), particleClusterCache.end(), -1);
+	}
+	bfsStackCache.clear();
+	bfsStackCache.reserve(256);
 
 	std::vector<Cluster> clusters;
 	clusters.reserve(maxK + 4);
 
 	for (int seed = 0; seed < n; seed++) {
-		if (!isCore[seed]) continue;
-		if (particleCluster[seed] >= 0) continue;
+		if (!isCoreCache[seed]) continue;
+		if (particleClusterCache[seed] >= 0) continue;
 
 		// 新 cluster：从 seed 出发 BFS
 		int curClusterId = (int)clusters.size();
-		particleCluster[seed] = curClusterId;
-		bfsStack.clear();
-		bfsStack.push_back(seed);
+		particleClusterCache[seed] = curClusterId;
+		bfsStackCache.clear();
+		bfsStackCache.push_back(seed);
 
 		glm::vec3 sumPos(0), sumVel(0);
 		float sumMass = 0;
 		float sumR = 0, sumG = 0, sumB = 0;
 		int sumCount = 0;
 
-		while (!bfsStack.empty()) {
-			int curIdx = bfsStack.back();
-			bfsStack.pop_back();
+		while (!bfsStackCache.empty()) {
+			int curIdx = bfsStackCache.back();
+			bfsStackCache.pop_back();
 
 			const auto& p = particles[curIdx];
 			sumPos  += p.pos;
@@ -746,12 +762,12 @@ std::vector<Flock3D::Cluster> Flock3D::getClusters(int maxK) const {
 			sumCount++;
 
 			// 扩展到所有未分配的邻居（核心点 + 边界粒子都吸收）
-			collectNeighbors(curIdx, tmpNbrs);
-			for (int j : tmpNbrs) {
-				if (particleCluster[j] >= 0) continue;
-				particleCluster[j] = curClusterId;
+			collectNeighbors(curIdx, tmpNbrsCache);
+			for (int j : tmpNbrsCache) {
+				if (particleClusterCache[j] >= 0) continue;
+				particleClusterCache[j] = curClusterId;
 				// 只有核心点继续扩展（DBSCAN 经典做法 — 边界粒子不扩展）
-				if (isCore[j]) bfsStack.push_back(j);
+				if (isCoreCache[j]) bfsStackCache.push_back(j);
 				else {
 					// 边界粒子加入统计但不扩展
 					const auto& pj = particles[j];

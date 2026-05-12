@@ -1,6 +1,6 @@
 <?xml version="1.0"?>
 <Flock_3D>
-	<particles>8392</particles>
+	<particles>6004</particles>
 	<world_radius>250</world_radius>
 	<alpha>0.6</alpha>
 	<autoRotate>0</autoRotate>
@@ -19,7 +19,7 @@
 	<flock_sep>0.6</flock_sep>
 	<flock_coh>20</flock_coh>
 	<coh_speed>0.170996</coh_speed>
-	<flock_nbrR>79.027</flock_nbrR>
+	<flock_nbrR>64.3029</flock_nbrR>
 	<merge_dist>6</merge_dist>
 	<spawn_rate>40000</spawn_rate>
 	<min_alive>0.89</min_alive>
@@ -46,4 +46,6 @@
 	<collision_window>167</collision_window>
 	<min_hits_per_cell>12</min_hits_per_cell>
 	<cluster_min_hits>15</cluster_min_hits>
+	<cluster_radius>22.0276</cluster_radius>
+	<cluster_minNeighbors>30</cluster_minNeighbors>
 </Flock_3D>

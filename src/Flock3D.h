@@ -118,6 +118,15 @@ private:
 	ofMesh particleMesh;
 	ofMesh trailMesh;
 
+	// DBSCAN cluster 检测复用 buffer（避免每帧分配 8000+ vector）
+	// mutable：允许在 const getClusters() 内修改
+	mutable std::vector<std::vector<int>> clusterGrid;       // cell idx → particle indices
+	mutable std::vector<int>              particleCellCache; // 每粒子的 cell idx
+	mutable std::vector<char>             isCoreCache;       // char 比 vector<bool> 快
+	mutable std::vector<int>              particleClusterCache; // 每粒子的 cluster id
+	mutable std::vector<int>              bfsStackCache;
+	mutable std::vector<int>              tmpNbrsCache;
+
 	int   width  = 0, height = 0;
 	float noiseTimeOffset = 0.0f;
 
