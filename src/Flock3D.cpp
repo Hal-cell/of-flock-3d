@@ -46,6 +46,10 @@ void Flock3D::buildGui(ofParameterGroup& group) {
 	// ─── Fade ───
 	group.add(fadeInFrames.set("fadeIn frames",    20,     0,   120));
 	group.add(fadeOutFrames.set("fadeOut frames",  30,     0,   120));
+
+	// ─── Flash（merge 时高亮闪烁）───
+	group.add(flashFrames.set("flash frames",      12,     0,   60));     // ~200ms @ 60fps
+	group.add(flashIntensity.set("flash intensity", 1.0f, 0.0f, 2.0f));
 }
 
 //==============================================================
@@ -91,6 +95,7 @@ void Flock3D::respawnFlockParticle(Particle& p){
 
 	p.fadeInTimer  = fadeInFrames;
 	p.fadeOutTimer = -1;
+	p.flashTimer   = 0;
 }
 
 //--------------------------------------------------------------
@@ -117,6 +122,9 @@ void Flock3D::mergeIntoBigger(Particle& winner, Particle& loser){
 	ev.loserSize  = loserSize;
 	ev.color      = winner.color;
 	collisionsThisFrame.push_back(ev);
+
+	// winner 触发 flash（短暂高亮）
+	winner.flashTimer = flashFrames;
 
 	// loser 启动淡出
 	if (loser.fadeOutTimer < 0) {
@@ -329,10 +337,11 @@ void Flock3D::update(){
 		}
 	}
 
-	// ─── 4. Fade tick ───
+	// ─── 4. Fade + flash tick ───
 	for (auto& p : particles) {
 		if (!p.alive) continue;
 		if (p.fadeInTimer > 0) p.fadeInTimer--;
+		if (p.flashTimer  > 0) p.flashTimer--;
 
 		if (p.fadeOutTimer == 0) {
 			p.alive = false;
@@ -364,6 +373,8 @@ void Flock3D::draw(){
 	mesh.setMode(OF_PRIMITIVE_POINTS);
 	float fInFrames  = (float)fadeInFrames;
 	float fOutFrames = (float)fadeOutFrames;
+	float flFrames   = (float)flashFrames;
+	float flInt      = flashIntensity;
 
 	for (auto& p : particles) {
 		if (!p.alive) continue;
@@ -379,12 +390,31 @@ void Flock3D::draw(){
 			if (fadeOut < 0.0f) fadeOut = 0.0f;
 		}
 
+		// Flash：0 = 无；1 = 刚 merge，逐渐衰减到 0
+		float flashAmt = 0.0f;
+		if (flFrames > 0.0f && p.flashTimer > 0) {
+			flashAmt = (float)p.flashTimer / flFrames;
+		}
+		flashAmt *= flInt;   // 用户控制强度
+
 		mesh.addVertex(p.pos);
 
+		// 颜色：闪烁时 lerp 向白 + 提升 alpha（HDR 感）
 		ofFloatColor c = p.color;
+		if (flashAmt > 0.0f) {
+			float k = ofClamp(flashAmt, 0.0f, 1.0f);
+			c.r = c.r * (1.0f - k) + 1.0f * k;
+			c.g = c.g * (1.0f - k) + 1.0f * k;
+			c.b = c.b * (1.0f - k) + 1.0f * k;
+			c.a = std::min(1.0f, c.a * (1.0f + flashAmt));
+		}
 		c.a *= fadeIn * fadeOut;
+
+		// Size：闪烁时短暂放大（最多 2.5x）
+		float displaySize = p.size * (1.0f + flashAmt * 1.5f);
+
 		mesh.addColor(c);
-		mesh.addTexCoord(glm::vec2(p.size, 0.0f));
+		mesh.addTexCoord(glm::vec2(displaySize, 0.0f));
 	}
 
 	ofEnableBlendMode(OF_BLENDMODE_ADD);

@@ -71,6 +71,7 @@ private:
 		int          maxLifetime;
 		int          fadeInTimer;
 		int          fadeOutTimer;
+		int          flashTimer;     // > 0 = 刚 merge，剩余几帧高亮闪烁
 	};
 
 	std::vector<Particle> particles;
@@ -121,6 +122,10 @@ private:
 	// ─── Fade ───
 	ofParameter<int>   fadeInFrames;
 	ofParameter<int>   fadeOutFrames;
+
+	// ─── Flash（merge 时的高亮闪烁）───
+	ofParameter<int>   flashFrames;     // 闪烁持续帧数
+	ofParameter<float> flashIntensity;  // 0..2，闪烁强度（颜色+size 加成）
 
 	// helpers
 	void      resizeParticles();
