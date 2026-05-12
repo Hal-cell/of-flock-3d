@@ -263,37 +263,51 @@ void Synth::updateClusterVoices(const std::vector<Flock3D::Cluster>& clusters, f
 			int semi = pickFreshSemitone();
 			tr.semitone = semi;
 			float freq = rootFreq * powf(2.0f, semi / 12.0f);
-			v.active.store(true);
+
+			// CRITICAL：重置音频线程本地状态，避免上次 voice 残留导致 attack 从中间值开始
+			// 此时 active 还是 false（audio thread 不会读这些字段），安全写入
+			v.currentVol  = 0.0f;       // attack 必须从 0 起
+			v.currentFreq = freq;       // 不要 glide，直接到目标频率
+			v.currentPan  = 0.5f;       // 等下面 targetPan 设置后会平滑过渡
+			v.phase[0]    = 0.0f;
+			v.phase[1]    = 0.333f;
+			v.phase[2]    = 0.666f;
+			v.svfLow      = 0.0f;
+			v.svfBand     = 0.0f;
+
 			v.targetFreq.store(freq);
-			// 重置 SVF state（避免上次 voice 的滤波器残留）
-			v.svfLow = 0.0f;
-			v.svfBand = 0.0f;
+			// 最后才设 active=true，确保音频线程读到的是完整初始化的 voice
+			v.active.store(true);
 		}
 		// 更新跟踪位置 + 目标音量 + pan
 		tr.trackedPos = c.centroid;
-		tr.fadeoutFrames = 0;   // 重置 fadeout（如果之前在淡出）
+		tr.fadeoutSec = 0.0f;   // 重置 fadeout（如果之前在淡出，rebound 回 sustain）
 		v.targetVol.store(1.0f);
 		float pan = ofClamp(c.centroid.x / (wr * 2.0f) + 0.5f, 0.0f, 1.0f);
 		v.targetPan.store(pan);
 		matched[bestIdx] = true;
 	}
 
-	// ─── Pass 2: 没匹配上的活 voice → fadeout ───
-	int releaseFrames = (int)(clusterReleaseMs.get() * 0.001f * 60.0f);   // 假设 60fps
-	if (releaseFrames < 1) releaseFrames = 1;
+	// ─── Pass 2: 没匹配上的活 voice → fadeout（时间精准）───
+	// 用实际 frame time 而不是假设 60fps，避免帧率波动让 audio 还没到 0 就被切断
+	float dt = ofGetLastFrameTime();
+	if (dt > 0.1f) dt = 0.1f;
+	float releaseSec = clusterReleaseMs.get() * 0.001f;
+	// 多给 5% 余量，确保音频侧 envelope 真的到 0 后才释放 voice
+	float releaseWithMargin = releaseSec * 1.05f;
 
 	for (int i = 0; i < NUM_DRONE_VOICES; i++) {
 		if (matched[i]) continue;
 		if (!droneTracking[i].active) continue;
 
-		if (droneTracking[i].fadeoutFrames == 0) {
+		if (droneTracking[i].fadeoutSec <= 0.0f) {
 			// 启动 fadeout
 			droneVoices[i].targetVol.store(0.0f);
-			droneTracking[i].fadeoutFrames = releaseFrames;
+			droneTracking[i].fadeoutSec = releaseWithMargin;
 		} else {
-			droneTracking[i].fadeoutFrames--;
-			if (droneTracking[i].fadeoutFrames <= 0) {
-				// 完全淡出 → 释放
+			droneTracking[i].fadeoutSec -= dt;
+			if (droneTracking[i].fadeoutSec <= 0.0f) {
+				// 完全淡出 → 释放（此时 audio envelope 已严格归零，无 cliff）
 				droneTracking[i].active = false;
 				droneVoices[i].active.store(false);
 			}
@@ -364,10 +378,13 @@ void Synth::audioOut(ofSoundBuffer& buffer){
 	float svfQ  = 1.0f - ofClamp(clusterResonance.get(), 0.0f, 0.95f);
 	if (svfQ < 0.05f) svfQ = 0.05f;
 
-	float attackTau  = ofClamp(clusterAttackMs.get(),  10.0f, 10000.0f) * 0.001f * sampleRate;
-	float releaseTau = ofClamp(clusterReleaseMs.get(), 10.0f, 10000.0f) * 0.001f * sampleRate;
-	float attackCoef  = 1.0f - expf(-1.0f / attackTau);
-	float releaseCoef = 1.0f - expf(-1.0f / releaseTau);
+	// 线性包络：每 sample 增量 = 1 / (attackMs * sampleRate / 1000)
+	// 精准时长：经过 attackMs 后 currentVol 严格 = 1.0；release 同理严格 = 0.0
+	// 避免指数包络在固定时间内只到 0.37 → 被 fadeoutFrames 掐断的 cliff
+	float attackSamples  = std::max(1.0f, clusterAttackMs.get()  * 0.001f * sampleRate);
+	float releaseSamples = std::max(1.0f, clusterReleaseMs.get() * 0.001f * sampleRate);
+	float attackPerSample  = 1.0f / attackSamples;
+	float releasePerSample = 1.0f / releaseSamples;
 	float detune = clusterDetune;
 	float detuneRatios[3] = {1.0f, 1.0f + detune, 1.0f - detune};
 
@@ -388,12 +405,19 @@ void Synth::audioOut(ofSoundBuffer& buffer){
 				float tFreq = dv.targetFreq.load();
 				float tPan  = dv.targetPan.load();
 
-				float coef = (tVol > dv.currentVol) ? attackCoef : releaseCoef;
-				dv.currentVol  += (tVol - dv.currentVol)  * coef;
+				// 线性包络（精准时长，到点严格归零/满值）
+				if (tVol > dv.currentVol) {
+					dv.currentVol += attackPerSample;
+					if (dv.currentVol > tVol) dv.currentVol = tVol;
+				} else if (tVol < dv.currentVol) {
+					dv.currentVol -= releasePerSample;
+					if (dv.currentVol < tVol) dv.currentVol = tVol;
+				}
+
 				dv.currentFreq += (tFreq - dv.currentFreq) * 0.0005f;
 				dv.currentPan  += (tPan - dv.currentPan)  * 0.001f;
 
-				if (dv.currentVol < 0.00001f && tVol < 0.0001f) continue;
+				if (dv.currentVol <= 0.0f && tVol <= 0.0f) continue;
 
 				// 3 detuned saws 叠加（PolyBLEP 抗混叠）
 				float rawSample = 0;

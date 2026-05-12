@@ -112,8 +112,8 @@ private:
 	struct DroneTracking {
 		bool      active = false;
 		glm::vec3 trackedPos{0};
-		int       fadeoutFrames = 0;
-		int       semitone = 0;   // 半音偏移（从 rootFreq 起），用于 pitch 不重复
+		float     fadeoutSec = 0.0f;   // 剩余 release 时间（秒），按真实 frame time 倒计时
+		int       semitone = 0;        // 半音偏移（从 rootFreq 起），用于 pitch 不重复
 	};
 	std::array<DroneTracking, NUM_DRONE_VOICES> droneTracking;
 

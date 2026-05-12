@@ -33,12 +33,12 @@
 		<FM_idxDecay__ms_>18.5131</FM_idxDecay__ms_>
 	</FM>
 	<ClusterDrone>
-		<vol>0.352041</vol>
-		<attack__ms_>1357.51</attack__ms_>
-		<release__ms_>3658.82</release__ms_>
-		<detune>0.00408163</detune>
-		<proximity>358.214</proximity>
-		<cutoff__Hz_>1166.13</cutoff__Hz_>
-		<resonance>0.372627</resonance>
+		<vol>0.5</vol>
+		<attack__ms_>3052.81</attack__ms_>
+		<release__ms_>4876.79</release__ms_>
+		<detune>0.00459184</detune>
+		<proximity>384.082</proximity>
+		<cutoff__Hz_>847.755</cutoff__Hz_>
+		<resonance>0.470153</resonance>
 	</ClusterDrone>
 </Synth>
