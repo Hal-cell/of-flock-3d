@@ -478,3 +478,38 @@ effectiveCellDensity = max(2, avgDensity × densityRatio)
 - 加 cluster 跟踪稳定性（Hungarian algorithm 匹配前后帧）
 - 加 cluster 持续时间过滤（瞬时 cluster 不算数）
 - DBSCAN 替换 BFS（更稳健的密度聚类）
+
+## rp-17 — Cluster detection via collision hotspots (algorithm overhaul)
+
+**Commit**: `git tag rp-17-collision-hotspot-cluster` → `73050a6`
+
+**Pivot**: 完全换算法 — 用碰撞事件位置而非粒子位置检测 cluster。
+
+**核心思想**: 粒子只有在被挤压到一起时才会 merge（碰撞），所以
+**碰撞集中的地方 = 真实的聚集中心**。这是行为信号，不受粒子总数干扰。
+
+**算法**:
+1. 维护滑动窗口的 collision history（默认 60 帧 ≈ 1 秒）
+2. 把所有历史碰撞按位置 spatial hash 到 3D grid
+3. 找"热点 cell"（≥ minHitsPerCell 次碰撞）
+4. BFS 合并相邻热点
+5. 总碰撞 ≥ minTotalHits 才算 cluster
+
+**为什么解决了之前的 bug**:
+- 没聚集 = 粒子分散 = 没 merge = 历史为空 = **0 cluster**（彻底静默）
+- 有聚集 = 粒子挤压 = 大量 merge 在小区域 = 热点 → cluster
+
+**GUI 变化**:
+| 旧（删除）| 新（加入）|
+|---|---|
+| cluster density ratio | collision window (frames) — 默认 60 |
+| cluster minMass | min hits per cell — 默认 3 |
+
+**参数调整**:
+- `cluster grid`: 12 → 16（cell 更小，适合稀疏的碰撞事件）
+- `cluster minCount` 语义变更："累计碰撞数" 默认 30 → 8
+
+**Use this checkpoint to**:
+- 加 cluster 跟踪稳定性（匹配前后帧的同一 cluster）
+- velocity reconstruction（从前后帧 centroid 漂移算 velocity）
+- 多尺度碰撞热点（小区域 + 大区域分别检测）
