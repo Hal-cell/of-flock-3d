@@ -319,3 +319,33 @@ ADSR 行为已实现（rp-09），本次只是精简池容量到用户指定的 
 **Use this checkpoint to**:
 - 实验更复杂的包络曲线（指数+线性混合、自定义曲线）
 - 加 decay/sustain 阶段（变 ADSR 为完整 4-stage）
+
+## rp-12 — Hall reverb (Hadamard FDN + HF damping + pre-delay)
+
+**Commit**: `git tag rp-12-hall-reverb` → `0de67b5`
+
+升级简单 FDN 为真正的"大空间"hall 混响。
+
+**架构变化**:
+- Delay 长度 ×3：34..57ms → **152..283ms**（cathedral 级别的空间尺度）
+- **Hadamard 4×4 矩阵**：每个 sample 把 4 条 delay 输出旋转 mix → 全对全 cross-feedback
+  → 几个 sample 内就密集扩散，没有 flutter echo
+- **HF damping**（每条 delay 一个 1-pole LP）：高频比低频衰减快 → 自然空间感
+- **Pre-delay** (0..200ms)：reverb 前的"空气间隙" → 距离感
+- **立体声 split 输出**：d[0]+d[2] → L, d[1]+d[3] → R → reverb tail 自然立体扩散
+
+**新 GUI**:
+| 参数 | 范围 | 默认 |
+|---|---|---|
+| `reverbSize` | 0..0.97 | 0.85 (~4 sec RT60) |
+| `reverbDamp` | 0..0.99 | 0.5 (中度衰减) |
+| `reverb preDelay (ms)` | 0..200 | 20 |
+
+**音色变化**:
+- 旧：短促小房间 ping-pong（~50ms tail）
+- 新：宽阔大厅 wash（数秒 tail）+ 高频自然消逝
+
+**Use this checkpoint to**:
+- 加 8-delay FDN 更密集
+- 加 modulated delays（chorused reverb）
+- 实验 plate / cathedral / spring 等不同空间预设
