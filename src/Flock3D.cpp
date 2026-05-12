@@ -69,6 +69,12 @@ void Flock3D::buildGui(ofParameterGroup& group) {
 	group.add(tailLength.set("tail length",          8,    0, int(TRAIL_MAX)));
 	group.add(tailAudioSensitivity.set("tail audio sens", 1.0f, 0.0f, 2.0f));
 	group.add(tailAlpha.set("tail alpha",            0.45f, 0.0f, 1.0f));
+
+	// ─── Material（着色小球）───
+	// 整体 dim，flash 时自动跳过 shading（让 white-lerp 干净突出）
+	group.add(matBrightness.set("brightness",   0.55f, 0.0f, 1.0f));
+	group.add(matSpecular.set("specular",       0.35f, 0.0f, 1.0f));
+	group.add(matAmbient.set("ambient",         0.25f, 0.0f, 0.5f));
 }
 
 //==============================================================
@@ -477,6 +483,9 @@ void Flock3D::draw(){
 	glEnable(GL_PROGRAM_POINT_SIZE);
 
 	particleShader.begin();
+	particleShader.setUniform1f("uBrightness", matBrightness);
+	particleShader.setUniform1f("uSpecular",   matSpecular);
+	particleShader.setUniform1f("uAmbient",    matAmbient);
 	particleMesh.draw();
 	particleShader.end();
 
@@ -821,6 +830,7 @@ std::vector<Flock3D::ClusterCandidate> Flock3D::getTopByMass(int K) const {
 //  Shader
 //==============================================================
 void Flock3D::loadShaderInline(){
+	// Vertex: 传 base color + 距离衰减给 frag
 	std::string vert = R"(
 		#version 150
 		uniform mat4 modelViewProjectionMatrix;
@@ -830,6 +840,7 @@ void Flock3D::loadShaderInline(){
 		in vec2 texcoord;
 
 		out vec4 vColor;
+		out float vDepthFade;
 
 		void main(){
 			vec4 viewPos = modelViewMatrix * position;
@@ -838,22 +849,64 @@ void Flock3D::loadShaderInline(){
 			gl_Position  = modelViewProjectionMatrix * position;
 			gl_PointSize = clamp(texcoord.x * 1000.0 / dist, 0.8, 96.0);
 
-			float depthFade = clamp(1100.0 / dist, 0.10, 2.0);
-			float alphaFade = clamp(900.0 / dist, 0.20, 1.5);
-			vColor = vec4(color.rgb * depthFade, color.a * alphaFade);
+			vDepthFade = clamp(1100.0 / dist, 0.20, 1.5);
+			vColor     = color;
 		}
 	)";
 
+	// Fragment: 把每个点 sprite 视为 hemisphere 表面
+	// gl_PointCoord 范围 0..1 → 把它当 sphere 的 (x,y)，由此重建 normal
+	// Lambert diffuse + 小高光 + 暗面 ambient 填充
+	// 整体保持 dim → flash（CPU 把 color → 白）自然能压过 shading
 	std::string frag = R"(
 		#version 150
-		in  vec4 vColor;
+		uniform float uBrightness;
+		uniform float uSpecular;
+		uniform float uAmbient;
+		in  vec4  vColor;
+		in  float vDepthFade;
 		out vec4 fragColor;
+
 		void main(){
+			// 把 point sprite 当 unit disc，反算 hemisphere normal
 			vec2 c = gl_PointCoord - vec2(0.5);
-			float d = length(c);
-			if (d > 0.5) discard;
-			float alpha = smoothstep(0.5, 0.0, d);
-			fragColor = vec4(vColor.rgb, vColor.a * alpha);
+			float d2 = dot(c, c);
+			if (d2 > 0.25) discard;
+
+			// 半径 0.5 的圆盘 → z = sqrt(0.25 - d²) * 2 → normal 单位向量
+			float z = sqrt(0.25 - d2) * 2.0;
+			vec3 N = normalize(vec3(c.x * 2.0, c.y * 2.0, z));
+
+			// 光源：上方偏左前（视图空间）
+			vec3 L = normalize(vec3(-0.4, -0.5, 0.7));
+			vec3 V = vec3(0.0, 0.0, 1.0);   // 视线方向
+			vec3 H = normalize(L + V);
+
+			// Lambert diffuse + ambient 填充
+			float NdotL = max(0.0, dot(N, L));
+			float diffuse = NdotL * (1.0 - uAmbient) + uAmbient;
+
+			// Phong-ish specular（点高光，紧致）
+			float NdotH = max(0.0, dot(N, H));
+			float spec = pow(NdotH, 28.0) * uSpecular;
+
+			// Flash detection：vColor 越接近白（flash 时 lerp 白），越用 flat 着色
+			// 让 flash 粒子干净突出，不被 shading 削弱
+			float vBright = (vColor.r + vColor.g + vColor.b) / 3.0;
+			float flashWeight = smoothstep(0.65, 0.95, vBright);
+			diffuse = mix(diffuse, 1.0, flashWeight);
+
+			// 边缘抗锯齿（disc 边）
+			float d = sqrt(d2);
+			float edge = smoothstep(0.5, 0.46, d);
+
+			// 合成：基础色 × diffuse + 白色 spec
+			vec3 baseCol = vColor.rgb * vDepthFade * uBrightness;
+			vec3 finalCol = baseCol * diffuse + vec3(spec) * vDepthFade;
+
+			// alpha：边缘淡出，flash 时拉满
+			float a = vColor.a * edge * mix(0.85, 1.0, flashWeight);
+			fragColor = vec4(finalCol, a);
 		}
 	)";
 

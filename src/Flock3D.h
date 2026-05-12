@@ -203,6 +203,13 @@ private:
 	ofParameter<float> tailAlpha;              // trail 整体 alpha
 	float              audioInfluence = 0.0f;  // 来自外部 setAudioInfluence()
 
+	// ─── Material（着色 3D 小球质感）───
+	// 粒子被当作 hemisphere 着色：Lambert + 小镜面高光
+	// 整体保持 dim，让 merge flash（white-lerp）能突出对比
+	ofParameter<float> matBrightness;   // 整体亮度 0..1
+	ofParameter<float> matSpecular;     // 镜面高光强度 0..1
+	ofParameter<float> matAmbient;      // 暗面填充（避免黑死）0..0.5
+
 	// helpers
 	void      resizeParticles();
 	void      respawnFlockParticle(Particle& p);
