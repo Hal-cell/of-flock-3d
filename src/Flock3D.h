@@ -32,6 +32,7 @@ public:
 		float       winnerSize;
 		float       loserSize;
 		ofFloatColor color;    // 合并后的混色
+		bool        isAccent;  // 偶尔 accent merge（视觉更大闪烁、音频高八度）
 	};
 	const std::vector<CollisionEvent>& getCollisionsThisFrame() const { return collisionsThisFrame; }
 
@@ -72,6 +73,7 @@ private:
 		int          fadeInTimer;
 		int          fadeOutTimer;
 		int          flashTimer;     // > 0 = 刚 merge，剩余几帧高亮闪烁
+		float        flashScale;     // 1.0 = 普通；>1.0 = accent merge（更大闪烁）
 	};
 
 	std::vector<Particle> particles;
@@ -126,6 +128,10 @@ private:
 	// ─── Flash（merge 时的高亮闪烁）───
 	ofParameter<int>   flashFrames;     // 闪烁持续帧数
 	ofParameter<float> flashIntensity;  // 0..2，闪烁强度（颜色+size 加成）
+
+	// ─── Accent（偶尔大闪烁 + 音频高八度）───
+	ofParameter<float> accentChance;    // 0..1，每次 merge 命中的概率
+	ofParameter<float> accentSizeMul;   // accent flash 的 size 倍率
 
 	// helpers
 	void      resizeParticles();

@@ -67,6 +67,13 @@ void Synth::triggerCollision(const Flock3D::CollisionEvent& ev){
 		freq = rootFreq * powf(2.0f, t * 3.0f);
 	}
 
+	// Accent: 高八度（freq * 2）+ 振幅小幅 boost，让重音突出
+	float gain = eventGainPerHit;
+	if (ev.isAccent) {
+		freq *= 2.0f;        // +1 octave
+		gain *= 1.3f;        // 30% 更响
+	}
+
 	// pan：预算成 equal-power 系数（每 sample 用，不调三角函数）
 	float panPos = ofClamp(ev.pos.x / (wr * 2.0f) + 0.5f, 0.0f, 1.0f);
 	float panL = cosf(panPos * HALF_PI);
@@ -87,7 +94,7 @@ void Synth::triggerCollision(const Flock3D::CollisionEvent& ev){
 	if (next == ringRead.load(std::memory_order_acquire)) {
 		return;   // ring 满 → 丢
 	}
-	eventRing[w] = {freq, panL, panR, eventGainPerHit, baseDecay, brightness, attackSamples};
+	eventRing[w] = {freq, panL, panR, gain, baseDecay, brightness, attackSamples};
 	ringWrite.store(next, std::memory_order_release);
 }
 

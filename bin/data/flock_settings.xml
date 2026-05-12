@@ -14,7 +14,7 @@
 	<vortex_amp>116</vortex_amp>
 	<spiral_amp>0</spiral_amp>
 	<curl_amp>130</curl_amp>
-	<attractor_amp>33</attractor_amp>
+	<attractor_amp>50</attractor_amp>
 	<repeller_amp>27</repeller_amp>
 	<flock_sep>3.225</flock_sep>
 	<flock_coh>16</flock_coh>
@@ -31,4 +31,6 @@
 	<life_max_frames>600</life_max_frames>
 	<fadeIn_frames>20</fadeIn_frames>
 	<fadeOut_frames>30</fadeOut_frames>
+	<flash_frames>24</flash_frames>
+	<flash_intensity>2</flash_intensity>
 </Flock_3D>

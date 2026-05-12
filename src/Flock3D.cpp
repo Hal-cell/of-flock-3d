@@ -50,6 +50,10 @@ void Flock3D::buildGui(ofParameterGroup& group) {
 	// ─── Flash（merge 时高亮闪烁）───
 	group.add(flashFrames.set("flash frames",      12,     0,   60));     // ~200ms @ 60fps
 	group.add(flashIntensity.set("flash intensity", 1.0f, 0.0f, 2.0f));
+
+	// ─── Accent（偶尔重音：视觉大闪烁 + 音频高八度）───
+	group.add(accentChance.set("accent chance",  0.1f, 0.0f, 1.0f));      // 10% 默认
+	group.add(accentSizeMul.set("accent size",   2.5f, 1.0f, 5.0f));      // 普通的 2.5 倍 size
 }
 
 //==============================================================
@@ -96,6 +100,7 @@ void Flock3D::respawnFlockParticle(Particle& p){
 	p.fadeInTimer  = fadeInFrames;
 	p.fadeOutTimer = -1;
 	p.flashTimer   = 0;
+	p.flashScale   = 1.0f;
 }
 
 //--------------------------------------------------------------
@@ -114,6 +119,9 @@ void Flock3D::mergeIntoBigger(Particle& winner, Particle& loser){
 	winner.color.b = (winner.color.b * winner.mass + loser.color.b * loser.mass) / totalMass;
 	winner.color.a = std::min(1.0f, winner.color.a + loser.color.a * 0.1f);
 
+	// ─── Accent 抛骰子（一次决定视觉 + 音频，保持同步）───
+	bool isAccent = (ofRandom(1.0f) < accentChance);
+
 	// ─── 关键：把碰撞事件抛给外部（ofApp / 音频模块）───
 	CollisionEvent ev;
 	ev.pos        = winner.pos;
@@ -121,10 +129,12 @@ void Flock3D::mergeIntoBigger(Particle& winner, Particle& loser){
 	ev.winnerSize = prevWinnerSize;
 	ev.loserSize  = loserSize;
 	ev.color      = winner.color;
+	ev.isAccent   = isAccent;
 	collisionsThisFrame.push_back(ev);
 
-	// winner 触发 flash（短暂高亮）
-	winner.flashTimer = flashFrames;
+	// winner 触发 flash（accent 命中 → 更大 + 更久）
+	winner.flashTimer = flashFrames * (isAccent ? 2 : 1);
+	winner.flashScale = isAccent ? accentSizeMul.get() : 1.0f;
 
 	// loser 启动淡出
 	if (loser.fadeOutTimer < 0) {
@@ -410,8 +420,10 @@ void Flock3D::draw(){
 		}
 		c.a *= fadeIn * fadeOut;
 
-		// Size：闪烁时短暂放大（最多 2.5x）
-		float displaySize = p.size * (1.0f + flashAmt * 1.5f);
+		// Size：闪烁时短暂放大；accent 用 flashScale 进一步放大
+		// 普通 merge: flashScale=1 → max 2.5x
+		// accent merge: flashScale~2.5 → max ~6x（受 shader 上限 96px 截断）
+		float displaySize = p.size * (1.0f + flashAmt * 1.5f * p.flashScale);
 
 		mesh.addColor(c);
 		mesh.addTexCoord(glm::vec2(displaySize, 0.0f));
