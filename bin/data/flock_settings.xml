@@ -33,4 +33,6 @@
 	<fadeOut_frames>30</fadeOut_frames>
 	<flash_frames>24</flash_frames>
 	<flash_intensity>2</flash_intensity>
+	<accent_chance>0.04</accent_chance>
+	<accent_size>2.5</accent_size>
 </Flock_3D>

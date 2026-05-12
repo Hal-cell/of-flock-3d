@@ -58,14 +58,23 @@ private:
 	ofParameter<float> masterVol;
 	ofParameter<float> droneVol;
 	ofParameter<float> eventVol;       // 粒子触发器总音量
-	ofParameter<float> eventDecayMs;   // 事件衰减时长（毫秒）
-	ofParameter<float> eventGainPerHit;// 每次 hit 的振幅（避免太密太响）
+	ofParameter<float> eventDecayMs;   // P0 衰减时长（毫秒）
+	ofParameter<float> eventAttackMs;  // 起音 ramp 时长（毫秒）— 越短越尖锐
+	ofParameter<float> eventGainPerHit;// 每次 hit 的振幅
 	ofParameter<float> reverbAmt;
 	ofParameter<float> rootFreq;       // 基频（Hz），默认 110 (A2)
 	ofParameter<int>   scaleType;      // 0..SCALE_COUNT-1
-	ofParameter<bool>  eventQuantize;  // 是否量化 pitch 到 scale
-	ofParameter<float> minMassToFire;  // 低于此质量的碰撞被忽略（防 spam）
-	ofParameter<bool>  audioEnabled;   // 总开关
+	ofParameter<bool>  eventQuantize;  // pitch 量化到 scale
+	ofParameter<float> minMassToFire;  // 低于此质量的碰撞被忽略
+	ofParameter<bool>  audioEnabled;
+
+	// ─── Partial 结构（加性合成 4 个 inharmonic 分音）───
+	// 每个分音可独立调 ratio / amp / decay ratio（相对 P0）
+	// P0 是"基准"，默认 ratio=1, amp=1, decay ratio=1（其他相对 P0）
+	ofParameterGroup   partialsGroup;
+	ofParameter<float> pRatio[4];      // 频率倍率
+	ofParameter<float> pAmp[4];        // 振幅
+	ofParameter<float> pDecayRatio[4]; // 衰减时长 ratio（<1 = 比 P0 衰减快）
 
 	// ─── DroneLayer 状态（atomic，跨线程）───
 	std::atomic<float> a_aliveRatio   {0.0f};
@@ -111,14 +120,11 @@ private:
 	std::array<EventVoice, NUM_EVENT_VOICES> eventVoices;
 
 	// ─── Ring buffer 把碰撞事件从主线程传到音频线程（lock-free SPSC）───
+	// 完整 partial 结构在主线程预计算好；音频线程只 copy
 	struct TriggerEvent {
-		float fundamental;   // P0 频率（Hz）
-		float panL;
-		float panR;
-		float gain;          // 总体振幅
-		float baseDecay;     // P0 的 per-sample 衰减系数
-		float brightness;    // 0..1，越亮高分音越响
-		int   attackSamples; // 起音时长（样本数）
+		Partial partials[NUM_PARTIALS];   // freq, amp, decay, phase 已计算好
+		float   panL, panR;
+		int     attackSamples;
 	};
 	static constexpr int RING_SIZE = 256;   // 必须 2 的幂
 	static_assert((RING_SIZE & (RING_SIZE - 1)) == 0, "RING_SIZE must be power of 2");

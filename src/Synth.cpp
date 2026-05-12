@@ -24,12 +24,29 @@ void Synth::buildGui(ofParameterGroup& group){
 	group.add(droneVol.set("droneVol",           0.4f, 0.0f, 1.0f));
 	group.add(eventVol.set("eventVol",           0.6f, 0.0f, 1.0f));
 	group.add(eventDecayMs.set("decay (ms)",    50.0f, 5.0f, 500.0f));
+	group.add(eventAttackMs.set("attack (ms)",   2.0f, 0.1f, 50.0f));
 	group.add(eventGainPerHit.set("hit gain",    0.5f, 0.05f, 1.5f));
 	group.add(minMassToFire.set("minMass",       0.0f, 0.0f, 50.0f));
 	group.add(eventQuantize.set("quantize",      true));
 	group.add(reverbAmt.set("reverbAmt",         0.45f, 0.0f, 1.0f));
 	group.add(rootFreq.set("rootFreq (Hz)",      110.0f, 55.0f, 440.0f));
 	group.add(scaleType.set("scale",             0, 0, int(SCALE_COUNT) - 1));
+
+	// ─── Partials 子组（4 个分音独立 ratio / amp / decay）───
+	// 默认值 = tubular bell ratios（金属感 bell）
+	// 想要更"温和"：把 ratio 都设成整数倍（1, 2, 3, 4）
+	// 想要更"打击"：调小高分音 amp，加快它们的 decay ratio
+	partialsGroup.setName("partials");
+	float defaultRatios[4]      = {1.0f, 2.06f, 3.18f, 4.34f};
+	float defaultAmps[4]        = {1.0f, 0.55f, 0.30f, 0.18f};
+	float defaultDecayRatios[4] = {1.0f, 0.55f, 0.35f, 0.22f};
+	for (int p = 0; p < 4; p++) {
+		std::string base = "p" + std::to_string(p);
+		partialsGroup.add(pRatio[p].set(base + " ratio",      defaultRatios[p],      0.25f, 12.0f));
+		partialsGroup.add(pAmp[p].set(  base + " amp",        defaultAmps[p],        0.0f,  1.5f));
+		partialsGroup.add(pDecayRatio[p].set(base + " decay", defaultDecayRatios[p], 0.05f, 2.0f));
+	}
+	group.add(partialsGroup);
 }
 
 //==============================================================
@@ -74,27 +91,53 @@ void Synth::triggerCollision(const Flock3D::CollisionEvent& ev){
 		gain *= 1.3f;        // 30% 更响
 	}
 
-	// pan：预算成 equal-power 系数（每 sample 用，不调三角函数）
+	// pan：预算成 equal-power 系数
 	float panPos = ofClamp(ev.pos.x / (wr * 2.0f) + 0.5f, 0.0f, 1.0f);
 	float panL = cosf(panPos * HALF_PI);
 	float panR = sinf(panPos * HALF_PI);
 
-	// 基础衰减：把 ms 转成每 sample 的指数衰减系数
+	// P0 基础衰减：每 sample 指数衰减系数 = exp(-1 / (T_samples))
 	float decaySamples = eventDecayMs * 0.001f * sampleRate;
 	float baseDecay = expf(-1.0f / std::max(decaySamples, 1.0f));
 
-	// 亮度：用整体颜色亮度（也可以用其他映射）
+	// 亮度（particle 颜色亮度，0..1）
 	float brightness = ofClamp((ev.color.r + ev.color.g + ev.color.b) / 3.0f, 0.0f, 1.0f);
 
-	// 起音 ramp：约 2ms（防 click），轻微起音的"瞬态"质感
-	int attackSamples = (int)(0.002f * sampleRate);
+	// 起音 ramp（从 GUI ms 转 samples）
+	int attackSamples = std::max(1, (int)(eventAttackMs * 0.001f * sampleRate));
+
+	// ─── 主线程预计算 partial 结构（用当前 GUI 参数）───
+	// 把所有计算搬到这里，音频线程零成本 copy
+	TriggerEvent te;
+	te.panL = panL;
+	te.panR = panR;
+	te.attackSamples = attackSamples;
+
+	float nyquist = sampleRate * 0.45f;   // anti-alias cap
+	for (int p = 0; p < NUM_PARTIALS; p++) {
+		// 频率：基频 × ratio，受 Nyquist 限制
+		float pFreq = freq * pRatio[p].get();
+		if (pFreq > nyquist) pFreq = nyquist;
+		te.partials[p].freq = pFreq;
+
+		// 振幅：gain × pAmp × brightness 加权（P0 不受 brightness 影响）
+		float ampScale = (p == 0) ? 1.0f : brightness;
+		te.partials[p].amp = gain * pAmp[p].get() * ampScale;
+
+		// 衰减：baseDecay^(1/decayRatio) — ratio<1 → 衰减更快
+		float dr = std::max(pDecayRatio[p].get(), 0.001f);
+		te.partials[p].decay = powf(baseDecay, 1.0f / dr);
+
+		// 错开初相位防触发瞬间 in-phase 堆积
+		te.partials[p].phase = (float)p * 0.123f;
+	}
 
 	int w = ringWrite.load(std::memory_order_relaxed);
 	int next = (w + 1) & (RING_SIZE - 1);
 	if (next == ringRead.load(std::memory_order_acquire)) {
 		return;   // ring 满 → 丢
 	}
-	eventRing[w] = {freq, panL, panR, gain, baseDecay, brightness, attackSamples};
+	eventRing[w] = te;
 	ringWrite.store(next, std::memory_order_release);
 }
 
@@ -146,21 +189,14 @@ void Synth::audioOut(ofSoundBuffer& buffer){
 	float verbAmt = reverbAmt;
 	float evtVol = eventVol;
 
-	// ─── Inharmonic partial 比例（类编钟 / marimba，给打击乐自然金属感）───
-	// {1.0, 2.756, 5.404, 8.933} 是 tubular bell ratios — 稍微调整给柔和一点
-	static const float partialRatios[NUM_PARTIALS] = { 1.0f, 2.06f, 3.18f, 4.34f };
-	// 各分音的振幅基础值（fundamental 最响，高分音渐弱）
-	static const float partialAmps[NUM_PARTIALS]   = { 1.0f, 0.55f, 0.30f, 0.18f };
-	// 各分音衰减时长 ratio（< 1 = 比 P0 衰减快 → 高频先消失，温暖余韵）
-	static const float partialDecayRatio[NUM_PARTIALS] = { 1.0f, 0.55f, 0.35f, 0.22f };
-
 	// ─── 把 ring buffer 里的 trigger event 分配给空闲 event voices ───
+	// Partial 数据已在主线程预计算好，这里只 copy（无 GUI 读取）
 	int r = ringRead.load(std::memory_order_relaxed);
 	int wEnd = ringWrite.load(std::memory_order_acquire);
 	while (r != wEnd) {
 		const TriggerEvent& te = eventRing[r];
 
-		// 找空闲 voice，或偷振幅最小的（P0 amp 作为代表）
+		// 找空闲 voice，或偷 P0 amp 最小的
 		int targetIdx = -1;
 		float minAmp = 1e9;
 		for (int i = 0; i < NUM_EVENT_VOICES; i++) {
@@ -177,24 +213,9 @@ void Synth::audioOut(ofSoundBuffer& buffer){
 			v.attackSamples = te.attackSamples;
 			v.panL          = te.panL;
 			v.panR          = te.panR;
-
+			// 直接 copy 主线程算好的 partial 结构
 			for (int p = 0; p < NUM_PARTIALS; p++) {
-				float pFreq = te.fundamental * partialRatios[p];
-				// 限制 partial 频率不超过 Nyquist 一半（避免高音 alias）
-				if (pFreq > sampleRate * 0.45f) pFreq = sampleRate * 0.45f;
-				v.partials[p].freq  = pFreq;
-
-				// 高分音振幅按 brightness 加权（暗色 → 只有 P0；亮色 → 全分音）
-				float ampScale = (p == 0) ? 1.0f : te.brightness;
-				v.partials[p].amp   = te.gain * partialAmps[p] * ampScale;
-
-				// 高分音衰减比 P0 快
-				// 把"每 sample 衰减系数 baseDecay"加快：decay_p = baseDecay^(1/ratio)
-				// 等价于把衰减时长除以 ratio
-				v.partials[p].decay = powf(te.baseDecay, 1.0f / partialDecayRatio[p]);
-
-				// phase 错开避免堆积 click（每个分音不同初相位）
-				v.partials[p].phase = (float)p * 0.123f;
+				v.partials[p] = te.partials[p];
 			}
 		}
 		r = (r + 1) & (RING_SIZE - 1);

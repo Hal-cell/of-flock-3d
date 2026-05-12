@@ -8,8 +8,8 @@
 	<rootFreq__Hz_>91.575</rootFreq__Hz_>
 	<scale>1</scale>
 	<eventVol>1</eventVol>
-	<decay__ms_>116.375</decay__ms_>
+	<decay__ms_>163.4</decay__ms_>
 	<hit_gain>0.5865</hit_gain>
-	<minMass>0</minMass>
+	<minMass>2.75</minMass>
 	<quantize>1</quantize>
 </Synth>
