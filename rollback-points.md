@@ -235,3 +235,40 @@ Git tags marking stable checkpoints. Use `git checkout <tag>` to inspect, or `gi
 - 探索更智能的音高分配（避免重复音高、preferred 间隔等）
 - 试验 cluster 跟踪算法（DBSCAN、Hungarian assignment）
 - 让每个 cluster 用不同合成方法（不只 sine drone）
+
+## rp-09 — Cluster drone overhaul (saw+SVF, BFS, chord pitches)
+
+**Commit**: `git tag rp-09-saw-drone-bfs` → `35b19c7`
+
+**Three big improvements**:
+
+### 1) Cluster 检测：BFS 连通区域
+- 旧版每个密集 cell 独立成 cluster（一个大团被切成几个）
+- 新版用 BFS 把相邻密集 cell 合并 → 一个 cluster 反映真实的"粒子团"
+- 拆分参数：
+  - `cellDensity`：单 cell 算"密集"的最小粒子数（种子 + 扩展）
+  - `minCount` / `minMass`：合并后整体 cluster 的总量门槛
+- 现在大 flock 团会正确识别为 1 个 cluster
+
+### 2) 全局 Drone 删除
+- 删 DroneLayer（4 detuned sine + LFO + lowpass）
+- 删 Synth.updateStats、所有 a_aliveRatio 等 atomic
+- ofApp 不再调用 updateStats
+- 所有 drone 音都来自 per-cluster voice 池
+
+### 3) Cluster Drone DSP：saw + SVF + 和声优先 pitch
+- 每 voice = 3 detuned saw（PolyBLEP 抗混叠） → state-variable lowpass
+- 新 GUI：`cutoff (Hz)` (80..8000) + `resonance` (0..0.95)
+- 经典模拟合成器 pad 质感
+
+**pickFreshSemitone()**：
+- 优先级表：root → 8va → 5th → 2 oct → 5th+oct → M3 → M3+oct → m3 → ...
+- 跳过任一已激活 voice 占用的半音
+- 候选值量化到当前 scale → 与 event sound 同调
+- 结果：drones 自动形成干净 chord，无重复音高
+
+**Use this checkpoint to**:
+- 接 LFO 调制 cutoff（呼吸感）
+- 多滤波器类型（HP / BP / notch）
+- envelope follower → cutoff（声音明亮跟着粒子动）
+- 给 saw 加 PWM 或更复杂波形
