@@ -2,12 +2,12 @@
 <Synth>
 	<audio_ON>1</audio_ON>
 	<masterVol>0.67</masterVol>
-	<droneVol>0.109883</droneVol>
+	<droneVol>0</droneVol>
 	<voiceVol>0.7</voiceVol>
 	<reverbAmt>1</reverbAmt>
 	<rootFreq__Hz_>91.575</rootFreq__Hz_>
 	<scale>1</scale>
-	<eventVol>1</eventVol>
+	<eventVol>0.295</eventVol>
 	<decay__ms_>163.4</decay__ms_>
 	<hit_gain>0.5865</hit_gain>
 	<minMass>2.75</minMass>
@@ -32,4 +32,11 @@
 		<FM_index>3.73469</FM_index>
 		<FM_idxDecay__ms_>97.7449</FM_idxDecay__ms_>
 	</FM>
+	<ClusterDrone>
+		<vol>0</vol>
+		<attack__ms_>50</attack__ms_>
+		<release__ms_>2933.93</release__ms_>
+		<detune>0.00408163</detune>
+		<proximity>358.214</proximity>
+	</ClusterDrone>
 </Synth>

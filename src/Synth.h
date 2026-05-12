@@ -8,31 +8,23 @@
 /**
  * Synth — 基于 Flock3D 状态实时合成音频
  * ──────────────────────────────────────────────
- * 3 层架构：
+ * 2 层架构（全局 drone 已删除）：
  *
- *   A. DroneLayer  — 持续 drone，由 flock 整体状态调制
- *      4 detuned sine（fundamental + 5th + octave + super 2nd）
- *      LFO 速率 ← meanSpeed
- *      filter cutoff ← spread + aliveRatio
- *      volume ← aliveRatio
+ *   A. ClusterDrone (NEW: saw + SVF)
+ *      每个 cluster 一个 voice，3 detuned saw 经过 state-variable lowpass
+ *      pitch 用和声优先级分配（不重复 + chord 关系）
+ *      cutoff + resonance 可调 → 经典 polyphonic synth pad
  *
- *   B. EventVoices — 32 个短促触发声部（粒子合成器）
- *      每次碰撞抢占一个空闲 voice 触发 damped sine + FM brightness
- *      pitch 量化到 scale；衰减时间可调（默认 ~50ms）
- *      lock-free ring buffer 从主线程接收触发事件
+ *   B. EventVoices — 32 个短促触发声部（2-op FM 粒子合成器）
+ *      pitch 量化到同 scale，自动和 drone 同调
  *
- *   D. ModalReverb — feedback delay network
- *      4 条 delay line → 给 EventVoices 拖尾空间感
- *      tanh limiter 防爆音
+ *   D. ModalReverb — 4-tap feedback delay network 给空间感
  */
 class Synth {
 
 public:
 	void setup(int sampleRate, int bufferSize);
 	void audioOut(ofSoundBuffer& buffer);
-
-	// 主线程调用：传递 flock 状态（drone 用）
-	void updateStats(const Flock3D::Stats& s, float worldRadius);
 
 	// 主线程调用：碰撞触发 — 直接把碰撞事件推入 ring buffer
 	// 内部会按 GUI 参数计算 freq / pan / decay / modIndex
@@ -57,9 +49,8 @@ private:
 	int sampleRate = 44100;
 	int bufferSize = 512;
 
-	// ─── GUI 参数（主线程写，音频读取）───
+	// ─── GUI 参数 ───
 	ofParameter<float> masterVol;
-	ofParameter<float> droneVol;
 	ofParameter<float> eventVol;       // 粒子触发器总音量
 	ofParameter<float> eventDecayMs;   // P0 衰减时长（毫秒）
 	ofParameter<float> eventAttackMs;  // 起音 ramp 时长（毫秒）— 越短越尖锐
@@ -85,21 +76,27 @@ private:
 	ofParameter<float> clusterDroneVol;     // 总音量
 	ofParameter<float> clusterAttackMs;     // fade in 时长（ms）
 	ofParameter<float> clusterReleaseMs;    // fade out 时长（ms）
-	ofParameter<float> clusterDetune;       // 3 sine 的 detune 量（0.001..0.02）
-	ofParameter<float> clusterProximity;    // 空间邻近阈值（多近算同一 cluster）
+	ofParameter<float> clusterDetune;       // 3 saw 的 detune 量
+	ofParameter<float> clusterProximity;    // 空间邻近阈值（voice 跟踪用）
+	ofParameter<float> clusterCutoff;       // SVF lowpass cutoff（Hz）
+	ofParameter<float> clusterResonance;    // SVF resonance（0..0.95）
 
-	// ─── Cluster Drone Voice（polyphonic drone 池）───
+	// ─── Cluster Drone Voice（polyphonic drone 池，saw + SVF lowpass）───
 	struct DroneVoice {
 		std::atomic<bool>  active     {false};
 		std::atomic<float> targetVol  {0.0f};
 		std::atomic<float> targetFreq {110.0f};
 		std::atomic<float> targetPan  {0.5f};
 
-		// 音频线程本地（无锁）
+		// 音频线程本地
 		float currentVol  = 0.0f;
 		float currentFreq = 110.0f;
 		float currentPan  = 0.5f;
-		float phase[3]    = {0.0f, 0.333f, 0.666f};   // 3 detuned sines
+		float phase[3]    = {0.0f, 0.333f, 0.666f};   // 3 detuned saws
+
+		// SVF lowpass state（per-voice 滤波）
+		float svfLow  = 0.0f;
+		float svfBand = 0.0f;
 	};
 	static constexpr int NUM_DRONE_VOICES = 8;
 	std::array<DroneVoice, NUM_DRONE_VOICES> droneVoices;
@@ -108,31 +105,16 @@ private:
 	struct DroneTracking {
 		bool      active = false;
 		glm::vec3 trackedPos{0};
-		int       fadeoutFrames = 0;   // 0 = 不在 fadeout；>0 = 倒计时到完全淡出
+		int       fadeoutFrames = 0;
+		int       semitone = 0;   // 半音偏移（从 rootFreq 起），用于 pitch 不重复
 	};
 	std::array<DroneTracking, NUM_DRONE_VOICES> droneTracking;
 
-	// ─── DroneLayer 状态（atomic，跨线程）───
-	std::atomic<float> a_aliveRatio   {0.0f};
-	std::atomic<float> a_meanSpeed    {0.0f};
-	std::atomic<float> a_spread       {0.0f};
-	std::atomic<float> a_fieldNoise   {0.0f};
-	std::atomic<float> a_fieldVortex  {0.0f};
-	std::atomic<float> a_fieldSpiral  {0.0f};
-	std::atomic<float> a_fieldCurl    {0.0f};
-	std::atomic<float> a_fieldAttract {0.0f};
-	std::atomic<float> a_fieldRepel   {0.0f};
-	std::atomic<float> a_worldRadius  {250.0f};
+	// helpers
+	int pickFreshSemitone() const;  // 找一个未被占用的、和声优先级靠前的半音
 
-	// 音频线程本地状态（drone）
-	float dronePhase[4]   = {0, 0.25f, 0.5f, 0.75f};
-	float lfoPhase        = 0.0f;
-	// 一阶低通滤波器 state（drone filter）
-	float droneLpState    = 0.0f;
-	// 平滑后的 drone 控制量（避免突变）
-	float smAliveRatio    = 0.0f;
-	float smMeanSpeed     = 0.0f;
-	float smSpread        = 0.0f;
+	// 仅保留 worldRadius（cluster pan 需要）
+	std::atomic<float> a_worldRadius  {250.0f};
 
 	// ─── EventVoices（粒子触发的短促音，2-op FM 合成）───
 	// 经典 Chowning FM：carrier + modulator

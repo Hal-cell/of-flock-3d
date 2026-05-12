@@ -55,10 +55,14 @@ void Flock3D::buildGui(ofParameterGroup& group) {
 	group.add(accentChance.set("accent chance",  0.1f, 0.0f, 1.0f));      // 10% 默认
 	group.add(accentSizeMul.set("accent size",   2.5f, 1.0f, 5.0f));      // 普通的 2.5 倍 size
 
-	// ─── Cluster detection（驱动 drone 合成）───
-	group.add(clusterGridRes.set("cluster grid",   12,   4,   32));
-	group.add(clusterMinMass.set("cluster minMass", 60.0f, 5.0f, 500.0f));
-	group.add(clusterMinCount.set("cluster minCount", 8, 3, 100));
+	// ─── Cluster detection（BFS 连通区域 + 总量阈值）───
+	// 算法：先把粒子塞进 3D grid，找出密度 ≥ cellDensity 的 cell；
+	//      BFS 把相邻密集 cell 合并成一个 cluster；
+	//      最终用 minCount + minMass 决定该 cluster 是否"成立"
+	group.add(clusterGridRes.set("cluster grid",       12,   4,   32));
+	group.add(clusterCellDensity.set("cluster cellDensity", 6, 2, 100));
+	group.add(clusterMinCount.set("cluster minCount", 30,  5,  500));
+	group.add(clusterMinMass.set("cluster minMass",   60.0f, 5.0f, 1000.0f));
 }
 
 //==============================================================
@@ -508,7 +512,11 @@ Flock3D::Stats Flock3D::getStats() const {
 }
 
 //--------------------------------------------------------------
-//  Cluster detection（3D grid hash → 找高密度 cell）
+//  Cluster detection（grid hash + BFS 连通区域合并）
+//  - 步骤 1：把粒子塞进 3D grid
+//  - 步骤 2：找种子 cell（density ≥ cellDensity）
+//  - 步骤 3：BFS 把相邻密集 cell 合并成一个 cluster
+//  - 步骤 4：用 minCount / minMass 过滤掉太小的 cluster
 //--------------------------------------------------------------
 std::vector<Flock3D::Cluster> Flock3D::getClusters(int maxK) const {
 	int gridRes = clusterGridRes;
@@ -525,11 +533,12 @@ std::vector<Flock3D::Cluster> Flock3D::getClusters(int maxK) const {
 	std::vector<Cell> grid(totalCells);
 
 	float wr = worldRadius.get();
-	float invScale = (float)gridRes / (wr * 2.0f);   // pos → cell idx
+	float invScale = (float)gridRes / (wr * 2.0f);
 
+	// 步骤 1：粒子分桶
 	for (const auto& p : particles) {
 		if (!p.alive) continue;
-		if (p.fadeOutTimer >= 0) continue;          // 排除淡出中的
+		if (p.fadeOutTimer >= 0) continue;
 
 		int ix = (int)((p.pos.x + wr) * invScale);
 		int iy = (int)((p.pos.y + wr) * invScale);
@@ -549,26 +558,91 @@ std::vector<Flock3D::Cluster> Flock3D::getClusters(int maxK) const {
 		cell.colB += p.color.b;
 	}
 
-	float minMass  = clusterMinMass;
-	int   minCount = clusterMinCount;
+	int cellDensity = std::max(2, (int)clusterCellDensity);
+	int minCount    = (int)clusterMinCount;
+	float minMass   = clusterMinMass;
 
+	// 步骤 2-3：BFS 合并相邻密集 cell
+	std::vector<bool> visited(totalCells, false);
 	std::vector<Cluster> clusters;
 	clusters.reserve(maxK + 4);
 
-	for (const auto& cell : grid) {
-		if (cell.mass < minMass || cell.count < minCount) continue;
+	auto cellIdx3 = [gridRes](int x, int y, int z) {
+		return x + y * gridRes + z * gridRes * gridRes;
+	};
 
-		Cluster c;
-		c.totalMass     = cell.mass;
-		c.particleCount = cell.count;
-		float invN = 1.0f / (float)cell.count;
-		c.centroid  = cell.posSum * invN;
-		c.velocity  = cell.velSum * invN;
-		c.avgColor  = ofFloatColor(cell.colR * invN, cell.colG * invN, cell.colB * invN, 1.0f);
-		clusters.push_back(c);
+	for (int z = 0; z < gridRes; z++) {
+		for (int y = 0; y < gridRes; y++) {
+			for (int x = 0; x < gridRes; x++) {
+				int idx = cellIdx3(x, y, z);
+				if (visited[idx]) continue;
+				if (grid[idx].count < cellDensity) continue;
+
+				// BFS：种子在 (x,y,z)，扩展到所有邻接密集 cell
+				Cluster c;
+				float    sumMass = 0;
+				int      sumCount = 0;
+				glm::vec3 sumPos(0), sumVel(0);
+				float    sumR = 0, sumG = 0, sumB = 0;
+
+				std::vector<int> stack;
+				stack.reserve(32);
+				stack.push_back(idx);
+				visited[idx] = true;
+
+				while (!stack.empty()) {
+					int curIdx = stack.back();
+					stack.pop_back();
+
+					const Cell& cell = grid[curIdx];
+					sumMass  += cell.mass;
+					sumCount += cell.count;
+					sumPos   += cell.posSum;
+					sumVel   += cell.velSum;
+					sumR     += cell.colR;
+					sumG     += cell.colG;
+					sumB     += cell.colB;
+
+					int cz = curIdx / (gridRes * gridRes);
+					int cy = (curIdx / gridRes) % gridRes;
+					int cx = curIdx % gridRes;
+
+					// 6 个面邻居（不算对角，足够稳定）
+					int neighbors[6][3] = {
+						{cx-1, cy, cz}, {cx+1, cy, cz},
+						{cx, cy-1, cz}, {cx, cy+1, cz},
+						{cx, cy, cz-1}, {cx, cy, cz+1}
+					};
+					for (int n = 0; n < 6; n++) {
+						int nx = neighbors[n][0];
+						int ny = neighbors[n][1];
+						int nz = neighbors[n][2];
+						if (nx < 0 || nx >= gridRes) continue;
+						if (ny < 0 || ny >= gridRes) continue;
+						if (nz < 0 || nz >= gridRes) continue;
+						int nIdx = cellIdx3(nx, ny, nz);
+						if (visited[nIdx]) continue;
+						// 邻居只要"半密集"就并入（拓展性更柔和）
+						if (grid[nIdx].count < std::max(2, cellDensity / 2)) continue;
+						visited[nIdx] = true;
+						stack.push_back(nIdx);
+					}
+				}
+
+				// 步骤 4：cluster 是否成立
+				if (sumCount < minCount || sumMass < minMass) continue;
+
+				c.totalMass     = sumMass;
+				c.particleCount = sumCount;
+				float invN = 1.0f / (float)sumCount;
+				c.centroid  = sumPos * invN;
+				c.velocity  = sumVel * invN;
+				c.avgColor  = ofFloatColor(sumR * invN, sumG * invN, sumB * invN, 1.0f);
+				clusters.push_back(c);
+			}
+		}
 	}
 
-	// 按 mass 降序，取 top-K
 	std::sort(clusters.begin(), clusters.end(),
 		[](const Cluster& a, const Cluster& b){ return a.totalMass > b.totalMass; });
 	if ((int)clusters.size() > maxK) clusters.resize(maxK);

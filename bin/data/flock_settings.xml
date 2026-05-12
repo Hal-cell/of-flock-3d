@@ -19,7 +19,7 @@
 	<flock_sep>3.225</flock_sep>
 	<flock_coh>16</flock_coh>
 	<coh_speed>0.425</coh_speed>
-	<flock_nbrR>91.9</flock_nbrR>
+	<flock_nbrR>185.5</flock_nbrR>
 	<merge_dist>6</merge_dist>
 	<spawn_rate>40000</spawn_rate>
 	<min_alive>0.9</min_alive>
@@ -35,4 +35,7 @@
 	<flash_intensity>2</flash_intensity>
 	<accent_chance>0.04</accent_chance>
 	<accent_size>2.5</accent_size>
+	<cluster_grid>12</cluster_grid>
+	<cluster_minMass>60</cluster_minMass>
+	<cluster_minCount>8</cluster_minCount>
 </Flock_3D>

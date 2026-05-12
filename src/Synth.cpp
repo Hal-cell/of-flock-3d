@@ -21,7 +21,6 @@ void Synth::buildGui(ofParameterGroup& group){
 	group.setName("Synth");
 	group.add(audioEnabled.set("audio ON",       true));
 	group.add(masterVol.set("masterVol",         0.5f, 0.0f, 1.0f));
-	group.add(droneVol.set("droneVol",           0.4f, 0.0f, 1.0f));
 	group.add(eventVol.set("eventVol",           0.6f, 0.0f, 1.0f));
 	group.add(eventDecayMs.set("decay (ms)",    50.0f, 5.0f, 500.0f));
 	group.add(eventAttackMs.set("attack (ms)",   2.0f, 0.1f, 50.0f));
@@ -46,30 +45,16 @@ void Synth::buildGui(ofParameterGroup& group){
 	fmGroup.add(fmIndexDecayMs.set("FM idxDecay (ms)",  40.0f, 1.0f, 500.0f));
 	group.add(fmGroup);
 
-	// ─── Cluster Drone 子组 ───
+	// ─── Cluster Drone 子组（saw + SVF lowpass + chord 优先 pitch）───
 	clusterDroneGroup.setName("ClusterDrone");
 	clusterDroneGroup.add(clusterDroneVol.set("vol",          0.5f,   0.0f,   1.0f));
 	clusterDroneGroup.add(clusterAttackMs.set("attack (ms)",  800.0f, 50.0f, 4000.0f));
 	clusterDroneGroup.add(clusterReleaseMs.set("release (ms)", 1500.0f, 50.0f, 6000.0f));
-	clusterDroneGroup.add(clusterDetune.set("detune",         0.005f, 0.0f,  0.02f));
+	clusterDroneGroup.add(clusterDetune.set("detune",         0.008f, 0.0f,  0.03f));
 	clusterDroneGroup.add(clusterProximity.set("proximity",   80.0f,  10.0f, 400.0f));
+	clusterDroneGroup.add(clusterCutoff.set("cutoff (Hz)",    600.0f, 80.0f, 8000.0f));
+	clusterDroneGroup.add(clusterResonance.set("resonance",   0.3f,   0.0f,  0.95f));
 	group.add(clusterDroneGroup);
-}
-
-//==============================================================
-//  主线程：更新 drone / clusters
-//==============================================================
-void Synth::updateStats(const Flock3D::Stats& s, float worldRadius){
-	a_aliveRatio.store(s.aliveRatio);
-	a_meanSpeed.store(s.meanSpeed);
-	a_spread.store(s.spread);
-	a_fieldNoise.store(s.fieldNoise);
-	a_fieldVortex.store(s.fieldVortex);
-	a_fieldSpiral.store(s.fieldSpiral);
-	a_fieldCurl.store(s.fieldCurl);
-	a_fieldAttract.store(s.fieldAttractor);
-	a_fieldRepel.store(s.fieldRepeller);
-	a_worldRadius.store(worldRadius);
 }
 
 //--------------------------------------------------------------
@@ -160,6 +145,57 @@ void Synth::triggerCollision(const Flock3D::CollisionEvent& ev){
 }
 
 //==============================================================
+//  Cluster Drone — 主线程：和声优先级 + 不重复的 pitch 分配
+//  - chord 优先级（按典型 chord 排序，先 root/octave/5th，再 3rd 等）
+//  - 优先级中跳过被任一活 voice 占用的半音
+//  - 拿到候选半音后再 quantize 到当前 scale（与 events 共调）
+//==============================================================
+int Synth::pickFreshSemitone() const {
+	// chord-priority 半音偏移（从 rootFreq 起算）
+	// 经典 chord：root, 8va, 5th, 8va+5th, 2 octs, M3, m3, 11, 7th, M6...
+	// 含负值（去低于 root 的位置）增加变化
+	static const int priority[] = {
+		0, 12, 7, 24, 19,                  // root + 5th 系
+		4, 16, 3, 15,                      // M3 / m3 + 8va
+		11, 23, 10, 22,                    // M7 / m7
+		9, 21, 2, 14,                      // M6 / M2
+		-12, -5, 5, 17,                    // 8va 下、4th 系
+		36, -24                            // 极端高低（fallback）
+	};
+	const int nPriority = sizeof(priority) / sizeof(priority[0]);
+
+	// 收集已用半音
+	std::vector<int> used;
+	used.reserve(NUM_DRONE_VOICES);
+	for (int i = 0; i < NUM_DRONE_VOICES; i++) {
+		if (droneTracking[i].active) {
+			used.push_back(droneTracking[i].semitone);
+		}
+	}
+
+	for (int k = 0; k < nPriority; k++) {
+		int candidate = priority[k];
+
+		// 量化到当前 scale（与 event 同调）
+		float root = rootFreq;
+		float candFreq = root * powf(2.0f, candidate / 12.0f);
+		float quantFreq = quantizeToScale(candFreq);
+		int quantSemi = (int)roundf(12.0f * log2f(quantFreq / root));
+
+		bool isUsed = false;
+		for (int u : used) {
+			if (u == quantSemi) { isUsed = true; break; }
+		}
+		if (!isUsed) return quantSemi;
+	}
+
+	// 全占满（极少见）→ 找一个还没用的高位
+	int maxUsed = -100;
+	for (int u : used) if (u > maxUsed) maxUsed = u;
+	return maxUsed + 12;
+}
+
+//==============================================================
 //  Cluster Drone — 主线程：根据 cluster 列表分配 / 匹配 / 释放 voice
 //  - 匹配规则：cluster 与"已激活 voice 的 trackedPos" 邻近 → 复用
 //  - 没匹配：分配空闲 voice，新计算 pitch（quantize 到 scale）
@@ -167,6 +203,8 @@ void Synth::triggerCollision(const Flock3D::CollisionEvent& ev){
 //  - fadeout 倒计时完 → 释放 voice 槽
 //==============================================================
 void Synth::updateClusterVoices(const std::vector<Flock3D::Cluster>& clusters, float wr){
+	a_worldRadius.store(wr);
+
 	std::array<bool, NUM_DRONE_VOICES> matched{};
 	matched.fill(false);
 
@@ -207,10 +245,16 @@ void Synth::updateClusterVoices(const std::vector<Flock3D::Cluster>& clusters, f
 		auto& v  = droneVoices[bestIdx];
 
 		if (isNewVoice) {
-			// 新 voice：选音高（quantize 到 scale，基于 mass）
+			// 新 voice：用和声优先级分配未占用的半音
 			tr.active = true;
+			int semi = pickFreshSemitone();
+			tr.semitone = semi;
+			float freq = rootFreq * powf(2.0f, semi / 12.0f);
 			v.active.store(true);
-			v.targetFreq.store(massToFreq(c.totalMass));
+			v.targetFreq.store(freq);
+			// 重置 SVF state（避免上次 voice 的滤波器残留）
+			v.svfLow = 0.0f;
+			v.svfBand = 0.0f;
 		}
 		// 更新跟踪位置 + 目标音量 + pan
 		tr.trackedPos = c.centroid;
@@ -258,36 +302,6 @@ void Synth::audioOut(ofSoundBuffer& buffer){
 		return;
 	}
 
-	// 读 atomic 参数到本地（一次性，避免每个 sample 都 load）
-	float aliveRatio = a_aliveRatio.load();
-	float meanSpeed  = a_meanSpeed.load();
-	float spread     = a_spread.load();
-	float worldRadius = a_worldRadius.load();
-	float root = rootFreq;
-
-	// 平滑 drone 控制量（一阶 IIR）
-	const float smoothA = 0.001f;   // ~22ms 时间常数
-	smAliveRatio += (aliveRatio - smAliveRatio) * smoothA * n;
-	smMeanSpeed  += (meanSpeed - smMeanSpeed) * smoothA * n;
-	smSpread     += (spread - smSpread) * smoothA * n;
-
-	// drone 频率：root + 调谐（小幅 detune）
-	float droneFreqs[4] = {
-		root,                          // fundamental
-		root * 1.4983f,                // perfect 5th
-		root * 2.0f * 1.003f,          // octave (slight detune for chorus)
-		root * 2.6667f,                // octave + major 6th
-	};
-	float droneVolL = droneVol * smAliveRatio;
-
-	// drone filter cutoff (Hz)：spread 大 → 滤波器开
-	float spreadNorm = ofClamp(smSpread / (worldRadius * 1.5f), 0.0f, 1.0f);
-	float droneCut = 200.0f + spreadNorm * 2500.0f;
-	float lpCoef   = ofClamp(droneCut / (sampleRate * 0.5f), 0.0001f, 0.5f);
-
-	// LFO 速率：meanSpeed 大 → 颤抖更快
-	float lfoRate = 0.2f + ofClamp(smMeanSpeed * 0.02f, 0.0f, 3.0f);   // 0.2 ~ 3.2 Hz
-
 	float master = masterVol;
 	float verbAmt = reverbAmt;
 	float evtVol = eventVol;
@@ -330,49 +344,28 @@ void Synth::audioOut(ofSoundBuffer& buffer){
 	}
 	ringRead.store(r, std::memory_order_release);
 
+	// ─── 预算 SVF cutoff / resonance 系数（per-buffer，每 sample 不变）───
+	float cutoff = ofClamp(clusterCutoff.get(), 20.0f, sampleRate * 0.4f);
+	float svfFc = 2.0f * sinf(PI * cutoff / sampleRate);
+	if (svfFc > 0.99f) svfFc = 0.99f;
+	float svfQ  = 1.0f - ofClamp(clusterResonance.get(), 0.0f, 0.95f);
+	if (svfQ < 0.05f) svfQ = 0.05f;
+
+	float attackTau  = ofClamp(clusterAttackMs.get(),  10.0f, 10000.0f) * 0.001f * sampleRate;
+	float releaseTau = ofClamp(clusterReleaseMs.get(), 10.0f, 10000.0f) * 0.001f * sampleRate;
+	float attackCoef  = 1.0f - expf(-1.0f / attackTau);
+	float releaseCoef = 1.0f - expf(-1.0f / releaseTau);
+	float detune = clusterDetune;
+	float detuneRatios[3] = {1.0f, 1.0f + detune, 1.0f - detune};
+
 	for (int i = 0; i < n; i++) {
 		float left = 0, right = 0;
 
 		// ───────────────────────────────
-		// A. DroneLayer — 4 detuned sines
-		// ───────────────────────────────
-		float droneSum = 0;
-		for (int d = 0; d < 4; d++) {
-			float dt = droneFreqs[d] / sampleRate;
-			dronePhase[d] += dt;
-			if (dronePhase[d] >= 1.0f) dronePhase[d] -= 1.0f;
-			droneSum += sinf(dronePhase[d] * TWO_PI);
-		}
-		droneSum *= 0.25f;   // 4 个加起来归一化
-
-		// LFO 调制振幅（轻微）
-		lfoPhase += lfoRate / sampleRate;
-		if (lfoPhase >= 1.0f) lfoPhase -= 1.0f;
-		float lfo = 0.5f + 0.5f * sinf(lfoPhase * TWO_PI);   // 0..1
-		droneSum *= (0.7f + 0.3f * lfo);
-
-		// 一阶低通滤波器
-		droneLpState += (droneSum - droneLpState) * lpCoef;
-		float droneOut = droneLpState * droneVolL;
-
-		// drone 居中 pan
-		left  += droneOut * 0.5f;
-		right += droneOut * 0.5f;
-
-		// ───────────────────────────────
-		// A.5  Cluster Drone — 多声部 drone（每个 cluster 一个 voice）
-		//      平滑 currentVol → targetVol（attack/release）
-		//      每 voice = 3 detuned sine 叠加
+		// A. Cluster Drone — 多声部，每 voice = 3 detuned saw + SVF lowpass
 		// ───────────────────────────────
 		{
 			float cdrVol = clusterDroneVol;
-			float attackTau = ofClamp(clusterAttackMs.get(),  10.0f, 10000.0f) * 0.001f * sampleRate;
-			float releaseTau = ofClamp(clusterReleaseMs.get(), 10.0f, 10000.0f) * 0.001f * sampleRate;
-			float attackCoef  = 1.0f - expf(-1.0f / attackTau);
-			float releaseCoef = 1.0f - expf(-1.0f / releaseTau);
-			float detune = clusterDetune;
-			float detuneRatios[3] = {1.0f, 1.0f + detune, 1.0f - detune};
-
 			float cdrSumL = 0, cdrSumR = 0;
 			for (int v = 0; v < NUM_DRONE_VOICES; v++) {
 				auto& dv = droneVoices[v];
@@ -382,7 +375,6 @@ void Synth::audioOut(ofSoundBuffer& buffer){
 				float tFreq = dv.targetFreq.load();
 				float tPan  = dv.targetPan.load();
 
-				// 平滑（attack vs release 分开系数）
 				float coef = (tVol > dv.currentVol) ? attackCoef : releaseCoef;
 				dv.currentVol  += (tVol - dv.currentVol)  * coef;
 				dv.currentFreq += (tFreq - dv.currentFreq) * 0.0005f;
@@ -390,18 +382,26 @@ void Synth::audioOut(ofSoundBuffer& buffer){
 
 				if (dv.currentVol < 0.00001f && tVol < 0.0001f) continue;
 
-				// 3 detuned sine 叠加
-				float sample = 0;
+				// 3 detuned saws 叠加（PolyBLEP 抗混叠）
+				float rawSample = 0;
 				for (int s = 0; s < 3; s++) {
 					float f = dv.currentFreq * detuneRatios[s];
 					if (f > sampleRate * 0.45f) f = sampleRate * 0.45f;
-					sample += sinf(dv.phase[s] * TWO_PI);
-					dv.phase[s] += f / sampleRate;
+					float dt = f / sampleRate;
+					rawSample += saw(dv.phase[s], dt);
+					dv.phase[s] += dt;
 					if (dv.phase[s] >= 1.0f) dv.phase[s] -= 1.0f;
 				}
-				sample *= dv.currentVol * (1.0f / 3.0f);   // 3 sines 归一化
+				rawSample *= (1.0f / 3.0f);   // 3 saws 归一化
 
-				// 等功率 pan
+				// SVF state-variable lowpass（per-voice 独立滤波）
+				dv.svfLow  += svfFc * dv.svfBand;
+				float svfHigh = rawSample - dv.svfLow - svfQ * dv.svfBand;
+				dv.svfBand += svfFc * svfHigh;
+				float filtered = dv.svfLow;
+
+				float sample = filtered * dv.currentVol;
+
 				float panL = cosf(dv.currentPan * HALF_PI);
 				float panR = sinf(dv.currentPan * HALF_PI);
 				cdrSumL += sample * panL;

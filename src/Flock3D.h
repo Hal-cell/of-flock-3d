@@ -143,10 +143,11 @@ private:
 	ofParameter<float> accentChance;    // 0..1，每次 merge 命中的概率
 	ofParameter<float> accentSizeMul;   // accent flash 的 size 倍率
 
-	// ─── Cluster detection（用于 drone 合成）───
-	ofParameter<int>   clusterGridRes;  // 3D grid 分辨率（每边 cell 数）
-	ofParameter<float> clusterMinMass;  // cell 总质量超过此值才算 cluster
-	ofParameter<int>   clusterMinCount; // cell 内粒子数最低
+	// ─── Cluster detection（BFS 连通区域 + 总量阈值）───
+	ofParameter<int>   clusterGridRes;     // 3D grid 分辨率
+	ofParameter<int>   clusterCellDensity; // 单个 cell 算"密集"的最小粒子数（种子 + 扩展）
+	ofParameter<int>   clusterMinCount;    // 整个 cluster 总粒子数下限
+	ofParameter<float> clusterMinMass;     // 整个 cluster 总质量下限
 
 	// helpers
 	void      resizeParticles();

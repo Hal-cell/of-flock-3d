@@ -61,17 +61,12 @@ void ofApp::exit(){
 void ofApp::update(){
 	flock.update();
 
-	// 主线程 → synth：每帧推送 flock 当前状态（用于 drone 调制）
-	Flock3D::Stats stats = flock.getStats();
-	synth.updateStats(stats, flock.getWorldRadius());
-
-	// Cluster 检测 → cluster drone voice 池
-	// drone 个数会自然跟着 cluster 个数动态变化
-	auto clusters = flock.getClusters(8);   // 最多 8 个 voice
+	// Cluster 检测 → cluster drone voice 池（drone 个数 = cluster 个数）
+	auto clusters = flock.getClusters(8);
 	synth.updateClusterVoices(clusters, flock.getWorldRadius());
 	lastClusterCount = (int)clusters.size();
 
-	// 主线程 → synth：本帧的所有碰撞 → 触发短促音
+	// 主线程 → synth：本帧的所有碰撞 → 触发短促 event 音
 	for (const auto& ev : flock.getCollisionsThisFrame()) {
 		synth.triggerCollision(ev);
 	}
