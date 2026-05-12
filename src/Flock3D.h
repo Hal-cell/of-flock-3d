@@ -183,10 +183,17 @@ private:
 	ofParameter<float> accentSizeMul;   // accent flash 的 size 倍率
 
 	// ─── Cluster detection（两个直观参数）───
-	// 把世界切成 gridRes³ 个 cell，每 cell 内"闪烁粒子"数 ≥ minFlash → cluster
-	// 只数闪烁粒子（merge 后的 winner）— 它们直接对应活跃聚集中心
-	ofParameter<int>   clusterGridRes;   // 3..10：每边 cell 数
-	ofParameter<int>   clusterMinFlash;  // 1..100：cell 内最少几个闪烁粒子算 cluster
+	// 把粒子实际占用的 bbox 切成 gridRes³ 个 cell，每 cell 内闪烁粒子 ≥ minFlash → cluster
+	ofParameter<int>   clusterGridRes;     // 3..10：每边 cell 数
+	ofParameter<int>   clusterMinFlash;    // 1..100：cell 内最少几个闪烁粒子算 cluster
+	ofParameter<bool>  showClusterGrid;    // debug：显示 grid + 高亮 dense cell
+
+	// 缓存 grid 信息（getClusters 写入，draw 读取做可视化）
+	mutable glm::vec3       lastBboxMin{0};
+	mutable glm::vec3       lastBboxMax{0};
+	mutable int             lastGridRes = 5;
+	mutable bool            lastBboxValid = false;
+	mutable std::vector<int> lastCellCounts;
 
 	// ─── Trail（光束尾巴）───
 	// 长度 = baseTailLen × (0.5 + audioInfluence × tailAudioSensitivity × 1.5)

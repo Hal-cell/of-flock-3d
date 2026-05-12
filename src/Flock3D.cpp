@@ -59,8 +59,9 @@ void Flock3D::buildGui(ofParameterGroup& group) {
 	// gridRes：世界切成 gridRes³ 个 cell（5 = 125 cells，cell ~100u 在默认 world）
 	// minFlash：cell 内"正在闪烁"（刚 merge 完）的粒子数 ≥ 此值 → cluster
 	// 只数闪烁粒子 → 直接锁定 merge 活跃区
-	group.add(clusterGridRes.set("cluster grid",      5,   3,   10));
-	group.add(clusterMinFlash.set("cluster minFlash", 5,   1,   100));
+	group.add(clusterGridRes.set("cluster grid",      5,    3,   10));
+	group.add(clusterMinFlash.set("cluster minFlash", 5,    1,   100));
+	group.add(showClusterGrid.set("show cluster grid", false));   // debug
 
 	// ─── Trail（光束尾巴）───
 	// length = baseLen × (0.5 + audio_influence × sensitivity × 1.5)
@@ -561,6 +562,43 @@ void Flock3D::draw(){
 
 	ofDisableBlendMode();
 
+	// ─── Debug：cluster grid 可视化 ───
+	if (showClusterGrid && lastBboxValid && !lastCellCounts.empty()) {
+		ofPushStyle();
+		ofNoFill();
+
+		// 外框：粒子 bbox（白色淡）
+		glm::vec3 bboxCenter = (lastBboxMin + lastBboxMax) * 0.5f;
+		glm::vec3 bboxSize   = lastBboxMax - lastBboxMin;
+		ofSetColor(255, 255, 255, 70);
+		ofDrawBox(bboxCenter, bboxSize.x, bboxSize.y, bboxSize.z);
+
+		// 每个 cell 的可视化
+		glm::vec3 cellSize = bboxSize / (float)lastGridRes;
+		int thresh = std::max(1, (int)clusterMinFlash);
+		int totalCells = lastGridRes * lastGridRes * lastGridRes;
+		for (int idx = 0; idx < totalCells; idx++) {
+			int cnt = lastCellCounts[idx];
+			if (cnt <= 0) continue;   // 空 cell 不画
+
+			int cz = idx / (lastGridRes * lastGridRes);
+			int cy = (idx / lastGridRes) % lastGridRes;
+			int cx = idx % lastGridRes;
+			glm::vec3 cellCenter = lastBboxMin + cellSize * glm::vec3(cx + 0.5f, cy + 0.5f, cz + 0.5f);
+
+			if (cnt >= thresh) {
+				// 达阈值：红色 cluster cell
+				ofSetColor(255, 70, 70, 220);
+			} else {
+				// 有闪烁但未达阈值：蓝色
+				ofSetColor(120, 140, 255, 110);
+			}
+			ofDrawBox(cellCenter, cellSize.x * 0.95f, cellSize.y * 0.95f, cellSize.z * 0.95f);
+		}
+
+		ofPopStyle();
+	}
+
 	cam.end();
 
 	// HUD
@@ -640,6 +678,36 @@ std::vector<Flock3D::Cluster> Flock3D::getClusters(int maxK) const {
 	if (gridRes < 2) gridRes = 2;
 	int totalCells = gridRes * gridRes * gridRes;
 
+	// 步骤 0：算 alive 粒子的 axis-aligned bounding box（grid 紧贴粒子区域）
+	glm::vec3 minPos(1e9f), maxPos(-1e9f);
+	bool any = false;
+	for (const auto& p : particles) {
+		if (!p.alive) continue;
+		if (p.fadeOutTimer >= 0) continue;
+		if (p.pos.x < minPos.x) minPos.x = p.pos.x;
+		if (p.pos.y < minPos.y) minPos.y = p.pos.y;
+		if (p.pos.z < minPos.z) minPos.z = p.pos.z;
+		if (p.pos.x > maxPos.x) maxPos.x = p.pos.x;
+		if (p.pos.y > maxPos.y) maxPos.y = p.pos.y;
+		if (p.pos.z > maxPos.z) maxPos.z = p.pos.z;
+		any = true;
+	}
+
+	if (!any) {
+		lastBboxValid = false;
+		lastCellCounts.clear();
+		return {};
+	}
+
+	// 边缘 padding（避免 bbox 边界粒子映射到 cell 越界）
+	glm::vec3 pad(2.0f);
+	minPos -= pad;
+	maxPos += pad;
+	glm::vec3 bboxSize = maxPos - minPos;
+	if (bboxSize.x < 1.0f) bboxSize.x = 1.0f;
+	if (bboxSize.y < 1.0f) bboxSize.y = 1.0f;
+	if (bboxSize.z < 1.0f) bboxSize.z = 1.0f;
+
 	struct Cell {
 		float mass = 0.0f;
 		int   count = 0;
@@ -649,8 +717,12 @@ std::vector<Flock3D::Cluster> Flock3D::getClusters(int maxK) const {
 	};
 	std::vector<Cell> grid(totalCells);
 
-	float wr = worldRadius.get();
-	float invScale = (float)gridRes / (wr * 2.0f);
+	// Grid 紧贴 bbox（不再用整个 world）
+	glm::vec3 invScale(
+		(float)gridRes / bboxSize.x,
+		(float)gridRes / bboxSize.y,
+		(float)gridRes / bboxSize.z
+	);
 
 	// 只数闪烁粒子（merge 完后 flashTimer > 0 的）
 	for (const auto& p : particles) {
@@ -658,12 +730,14 @@ std::vector<Flock3D::Cluster> Flock3D::getClusters(int maxK) const {
 		if (p.fadeOutTimer >= 0) continue;
 		if (p.flashTimer <= 0) continue;   // ← 关键：只数闪烁
 
-		int ix = (int)((p.pos.x + wr) * invScale);
-		int iy = (int)((p.pos.y + wr) * invScale);
-		int iz = (int)((p.pos.z + wr) * invScale);
-		if (ix < 0 || ix >= gridRes) continue;
-		if (iy < 0 || iy >= gridRes) continue;
-		if (iz < 0 || iz >= gridRes) continue;
+		// 相对 bbox 起点的坐标 → cell index
+		glm::vec3 rel = (p.pos - minPos);
+		int ix = (int)(rel.x * invScale.x);
+		int iy = (int)(rel.y * invScale.y);
+		int iz = (int)(rel.z * invScale.z);
+		if (ix < 0) ix = 0; if (ix >= gridRes) ix = gridRes - 1;
+		if (iy < 0) iy = 0; if (iy >= gridRes) iy = gridRes - 1;
+		if (iz < 0) iz = 0; if (iz >= gridRes) iz = gridRes - 1;
 
 		int idx = ix + iy * gridRes + iz * gridRes * gridRes;
 		Cell& cell = grid[idx];
@@ -675,6 +749,14 @@ std::vector<Flock3D::Cluster> Flock3D::getClusters(int maxK) const {
 		cell.colG += p.color.g;
 		cell.colB += p.color.b;
 	}
+
+	// 缓存 grid 信息给 draw() 做可视化
+	lastBboxMin = minPos;
+	lastBboxMax = maxPos;
+	lastGridRes = gridRes;
+	lastBboxValid = true;
+	lastCellCounts.resize(totalCells);
+	for (int i = 0; i < totalCells; i++) lastCellCounts[i] = grid[i].count;
 
 	int cellThreshold = std::max(1, (int)clusterMinFlash);
 
