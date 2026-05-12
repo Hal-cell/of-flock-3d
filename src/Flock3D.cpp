@@ -408,8 +408,21 @@ void Flock3D::draw(){
 		ofDrawAxis(150.0f);
 	}
 
-	ofMesh mesh;
-	mesh.setMode(OF_PRIMITIVE_POINTS);
+	// 复用 particleMesh（保留 vector capacity，clear 不释放内存）
+	particleMesh.clear();
+	particleMesh.setMode(OF_PRIMITIVE_POINTS);
+	// 预留 capacity（粒子数为上限）
+	{
+		auto& v = particleMesh.getVertices();
+		auto& c = particleMesh.getColors();
+		auto& t = particleMesh.getTexCoords();
+		if (v.capacity() < particles.size()) {
+			v.reserve(particles.size());
+			c.reserve(particles.size());
+			t.reserve(particles.size());
+		}
+	}
+
 	float fInFrames  = (float)fadeInFrames;
 	float fOutFrames = (float)fadeOutFrames;
 	float flFrames   = (float)flashFrames;
@@ -436,7 +449,7 @@ void Flock3D::draw(){
 		}
 		flashAmt *= flInt;   // 用户控制强度
 
-		mesh.addVertex(p.pos);
+		particleMesh.addVertex(p.pos);
 
 		// 颜色：闪烁时 lerp 向白 + 提升 alpha（HDR 感）
 		ofFloatColor c = p.color;
@@ -454,15 +467,15 @@ void Flock3D::draw(){
 		// accent merge: flashScale~2.5 → max ~6x（受 shader 上限 96px 截断）
 		float displaySize = p.size * (1.0f + flashAmt * 1.5f * p.flashScale);
 
-		mesh.addColor(c);
-		mesh.addTexCoord(glm::vec2(displaySize, 0.0f));
+		particleMesh.addColor(c);
+		particleMesh.addTexCoord(glm::vec2(displaySize, 0.0f));
 	}
 
 	ofEnableBlendMode(OF_BLENDMODE_ADD);
 	glEnable(GL_PROGRAM_POINT_SIZE);
 
 	particleShader.begin();
-	mesh.draw();
+	particleMesh.draw();
 	particleShader.end();
 
 	glDisable(GL_PROGRAM_POINT_SIZE);
@@ -478,38 +491,70 @@ void Flock3D::draw(){
 	if (effLen > TRAIL_MAX) effLen = TRAIL_MAX;
 
 	if (effLen >= 2 && tailAlpha > 0.001f) {
-		ofMesh trailMesh;
+		// 长尾自动 stride：effLen 越大 step 越大，限制总段数（避免顶点爆炸）
+		// effLen 1..12 → step=1（满细节）
+		// effLen 13..18 → step=2（跳点采样）
+		// effLen 19..24 → step=3
+		int step = 1;
+		if (effLen > 18)      step = 3;
+		else if (effLen > 12) step = 2;
+		int segmentsPerParticle = (effLen - 1) / step;
+
+		// 复用 trailMesh
+		trailMesh.clear();
 		trailMesh.setMode(OF_PRIMITIVE_LINES);
+
+		auto& tv = trailMesh.getVertices();
+		auto& tc = trailMesh.getColors();
+
+		// reserve 上限 = particle 数 × 段数 × 2 顶点
+		size_t maxVerts = particles.size() * (size_t)segmentsPerParticle * 2;
+		if (tv.capacity() < maxVerts) {
+			tv.reserve(maxVerts);
+			tc.reserve(maxVerts);
+		}
+
 		float tailA = tailAlpha;
 
 		for (const auto& p : particles) {
 			if (!p.alive) continue;
-			int count = std::min(p.trailCount, effLen);
+			int count = (p.trailCount < effLen) ? p.trailCount : effLen;
 			if (count < 2) continue;
 
-			// 起始索引：在环形 buffer 里走 count 步回到 oldest 端
-			int startIdx = (p.trailWriteIdx - count + TRAIL_MAX) % TRAIL_MAX;
+			int actualSegs = (count - 1) / step;
+			if (actualSegs < 1) continue;
+			float invSegs = 1.0f / (float)actualSegs;
 
-			for (int i = 0; i < count - 1; i++) {
-				int idx0 = (startIdx + i)     % TRAIL_MAX;
-				int idx1 = (startIdx + i + 1) % TRAIL_MAX;
+			// 预乘 tailA 到 color（每粒子一次）
+			ofFloatColor baseCol = p.color;
+			float baseAlpha = baseCol.a * tailA;
 
-				// Alpha fade：oldest = 0 透明 → newest = 1 不透明
-				float fadeOld = (float)(i)     / (count - 1);
-				float fadeNew = (float)(i + 1) / (count - 1);
+			// 起始索引：count 步走回 oldest
+			int idx = p.trailWriteIdx - count;
+			while (idx < 0) idx += TRAIL_MAX;
+			int nextIdx = idx + step;
+			if (nextIdx >= TRAIL_MAX) nextIdx -= TRAIL_MAX;
 
-				ofFloatColor c0 = p.color;
-				ofFloatColor c1 = p.color;
-				c0.a *= fadeOld * tailA;
-				c1.a *= fadeNew * tailA;
+			// 内循环：用 stride 跳点 + 无 modulo
+			for (int s = 0; s < actualSegs; s++) {
+				float fadeOld = (float)s * invSegs;
+				float fadeNew = (float)(s + 1) * invSegs;
 
-				trailMesh.addVertex(p.trail[idx0]);
-				trailMesh.addColor(c0);
-				trailMesh.addVertex(p.trail[idx1]);
-				trailMesh.addColor(c1);
+				ofFloatColor c0(baseCol.r, baseCol.g, baseCol.b, baseAlpha * fadeOld);
+				ofFloatColor c1(baseCol.r, baseCol.g, baseCol.b, baseAlpha * fadeNew);
+
+				tv.push_back(p.trail[idx]);
+				tv.push_back(p.trail[nextIdx]);
+				tc.push_back(c0);
+				tc.push_back(c1);
+
+				// stride 推进（无 modulo）
+				idx = nextIdx;
+				nextIdx += step;
+				if (nextIdx >= TRAIL_MAX) nextIdx -= TRAIL_MAX;
 			}
 		}
-		// 在 additive blend 下渲染 → 自然 glow 光束感
+
 		trailMesh.draw();
 	}
 

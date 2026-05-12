@@ -105,6 +105,10 @@ private:
 	ofEasyCam cam;
 	ofShader  particleShader;
 
+	// 复用的 mesh 对象（避免每帧重新分配；vector capacity 保留）
+	ofMesh particleMesh;
+	ofMesh trailMesh;
+
 	int   width  = 0, height = 0;
 	float noiseTimeOffset = 0.0f;
 
