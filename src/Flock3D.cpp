@@ -630,7 +630,12 @@ Flock3D::Stats Flock3D::getStats() const {
 //  - 步骤 4：cluster 总粒子数 ≥ minCount 才成立
 //--------------------------------------------------------------
 std::vector<Flock3D::Cluster> Flock3D::getClusters(int maxK) const {
-	const int gridRes = 14;       // 内部 hardcode（用户不需要关心）
+	// 三个参数都从 sensitivity 派生，但 gridRes 是关键修复：
+	// sens=0 严格：gridRes=14（细 cell，要求高密度）
+	// sens=1 宽松：gridRes=5（粗 cell，让聚集压缩到 1-3 cell 里 → 单 cell 计数能上去）
+	float sens = ofClamp(clusterSensitivity.get(), 0.0f, 1.0f);
+	int gridRes = (int)(14 - sens * 9.0f);   // 14 → 5
+	if (gridRes < 4) gridRes = 4;
 	int totalCells = gridRes * gridRes * gridRes;
 
 	struct Cell {
@@ -670,12 +675,11 @@ std::vector<Flock3D::Cluster> Flock3D::getClusters(int maxK) const {
 		cell.colB += p.color.b;
 	}
 
-	// 步骤 2：从 sensitivity 派生阈值
+	// 步骤 2：从 sensitivity 派生 cell 阈值 + 整 cluster 阈值
 	// sens 0 = 严格：cell 要比均匀密 8 倍，cluster ≥ 80 粒
-	// sens 1 = 宽松：cell 要比均匀密 2 倍，cluster ≥ 20 粒
-	float sens     = ofClamp(clusterSensitivity.get(), 0.0f, 1.0f);
-	float cellRatio = 8.0f - sens * 6.0f;           // 8 → 2
-	int   minCount  = (int)(80.0f - sens * 60.0f);  // 80 → 20
+	// sens 1 = 宽松：cell 要比均匀密 1.5 倍，cluster ≥ 15 粒
+	float cellRatio = 8.0f - sens * 6.5f;           // 8 → 1.5
+	int   minCount  = (int)(80.0f - sens * 65.0f);  // 80 → 15
 
 	// 自适应：阈值 = 均匀分布平均 × cellRatio（不受粒子总数影响）
 	float avgDensity = (totalCells > 0) ? (float)aliveCount / (float)totalCells : 0.0f;
