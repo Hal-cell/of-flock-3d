@@ -61,8 +61,9 @@ void ofApp::exit(){
 void ofApp::update(){
 	flock.update();
 
-	// Cluster 检测 → cluster drone voice 池（drone 个数 = cluster 个数）
-	auto clusters = flock.getClusters(8);
+	// Cluster 检测 → cluster drone voice 池（最多 4 个 drone）
+	// 多于 4 cluster 时只取 top-4 by mass（getClusters 内部 sort）
+	auto clusters = flock.getClusters(Synth::getMaxDroneVoices());
 	synth.updateClusterVoices(clusters, flock.getWorldRadius());
 	lastClusterCount = (int)clusters.size();
 
@@ -88,7 +89,9 @@ void ofApp::draw(){
 		flockGui.draw();
 		synthGui.draw();
 		ofSetColor(255, 200);
-		ofDrawBitmapString("clusters detected: " + ofToString(lastClusterCount) + " (= drone voices)",
+		ofDrawBitmapString("clusters: " + ofToString(lastClusterCount) +
+		                   "   drones active: " + ofToString(synth.getActiveDroneCount()) +
+		                   " / " + ofToString(Synth::getMaxDroneVoices()),
 		                   20, ofGetHeight() - 40);
 		ofDrawBitmapString("h: GUI | f: fullscreen | s: snap | r: rec | space: reset",
 		                   20, ofGetHeight() - 20);

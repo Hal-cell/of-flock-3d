@@ -144,6 +144,19 @@ void Synth::triggerCollision(const Flock3D::CollisionEvent& ev){
 	ringWrite.store(next, std::memory_order_release);
 }
 
+//--------------------------------------------------------------
+//  HUD 用：当前活跃的 drone voice 数
+//  - 包括 attack/sustain/release 各阶段
+//  - 主线程读 atomic（音频侧设置）
+//--------------------------------------------------------------
+int Synth::getActiveDroneCount() const {
+	int count = 0;
+	for (int i = 0; i < NUM_DRONE_VOICES; i++) {
+		if (droneVoices[i].active.load()) count++;
+	}
+	return count;
+}
+
 //==============================================================
 //  Cluster Drone — 主线程：和声优先级 + 不重复的 pitch 分配
 //  - chord 优先级（按典型 chord 排序，先 root/octave/5th，再 3rd 等）

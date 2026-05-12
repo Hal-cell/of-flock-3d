@@ -33,6 +33,12 @@ public:
 	// 主线程调用：传递 cluster 列表 → 驱动 polyphonic drone voice
 	void updateClusterVoices(const std::vector<Flock3D::Cluster>& clusters, float worldRadius);
 
+	// HUD 用：当前活跃（attack/sustain/release 中）的 drone voice 数
+	int getActiveDroneCount() const;
+
+	// 总池大小（HUD 显示用）
+	static constexpr int getMaxDroneVoices() { return NUM_DRONE_VOICES; }
+
 	// 主线程：GUI 控件参数
 	void buildGui(ofParameterGroup& group);
 
@@ -98,7 +104,8 @@ private:
 		float svfLow  = 0.0f;
 		float svfBand = 0.0f;
 	};
-	static constexpr int NUM_DRONE_VOICES = 8;
+	// 最多 4 个 drone voice 同时发声（cluster 数 > 4 时只发声 top-4 by mass）
+	static constexpr int NUM_DRONE_VOICES = 4;
 	std::array<DroneVoice, NUM_DRONE_VOICES> droneVoices;
 
 	// 主线程跟踪（不跨线程 — 只主线程访问）
