@@ -69,6 +69,13 @@ void Flock3D::buildGui(ofParameterGroup& group) {
 	group.add(tailLength.set("tail length",          8,    0, int(TRAIL_MAX)));
 	group.add(tailAudioSensitivity.set("tail audio sens", 1.0f, 0.0f, 2.0f));
 	group.add(tailAlpha.set("tail alpha",            0.45f, 0.0f, 1.0f));
+
+	// ─── Material（质感）───
+	group.add(matCoreSize.set("core size",       0.15f, 0.05f, 0.40f));
+	group.add(matCoreBoost.set("core boost",     1.5f,  0.0f,  3.0f));
+	group.add(matHaloSize.set("halo size",       2.0f,  1.0f,  4.0f));
+	group.add(matHaloStrength.set("halo strength", 0.5f, 0.0f, 2.0f));
+	group.add(matAtmospheric.set("atmospheric",  0.3f,  0.0f,  1.0f));
 }
 
 //==============================================================
@@ -477,6 +484,12 @@ void Flock3D::draw(){
 	glEnable(GL_PROGRAM_POINT_SIZE);
 
 	particleShader.begin();
+	// 传 material uniforms
+	particleShader.setUniform1f("uCoreSize",     matCoreSize);
+	particleShader.setUniform1f("uCoreBoost",    matCoreBoost);
+	particleShader.setUniform1f("uHaloSize",     matHaloSize);
+	particleShader.setUniform1f("uHaloStrength", matHaloStrength);
+	particleShader.setUniform1f("uAtmospheric",  matAtmospheric);
 	particleMesh.draw();
 	particleShader.end();
 
@@ -821,6 +834,7 @@ std::vector<Flock3D::ClusterCandidate> Flock3D::getTopByMass(int K) const {
 //  Shader
 //==============================================================
 void Flock3D::loadShaderInline(){
+	// Vertex：传递 dist 和 base color 给 frag（用于 atmospheric）
 	std::string vert = R"(
 		#version 150
 		uniform mat4 modelViewProjectionMatrix;
@@ -830,6 +844,8 @@ void Flock3D::loadShaderInline(){
 		in vec2 texcoord;
 
 		out vec4 vColor;
+		out float vDist;        // 给 frag 用：大气透视
+		out float vDepthFade;   // 给 frag 用：基础亮度衰减
 
 		void main(){
 			vec4 viewPos = modelViewMatrix * position;
@@ -838,22 +854,58 @@ void Flock3D::loadShaderInline(){
 			gl_Position  = modelViewProjectionMatrix * position;
 			gl_PointSize = clamp(texcoord.x * 1000.0 / dist, 0.8, 96.0);
 
-			float depthFade = clamp(1100.0 / dist, 0.10, 2.0);
-			float alphaFade = clamp(900.0 / dist, 0.20, 1.5);
-			vColor = vec4(color.rgb * depthFade, color.a * alphaFade);
+			vDepthFade = clamp(1100.0 / dist, 0.10, 2.0);
+			vDist      = dist;
+			vColor     = color;     // 原色，frag 里再 mix
 		}
 	)";
 
+	// Fragment：热中心 + 双层 Gaussian 光晕 + 大气透视
 	std::string frag = R"(
 		#version 150
-		in  vec4 vColor;
+		uniform float uCoreSize;       // 0.05..0.4
+		uniform float uCoreBoost;      // 0..3
+		uniform float uHaloSize;       // 1.0..4.0
+		uniform float uHaloStrength;   // 0..2
+		uniform float uAtmospheric;    // 0..1
+		in  vec4  vColor;
+		in  float vDist;
+		in  float vDepthFade;
 		out vec4 fragColor;
+
 		void main(){
 			vec2 c = gl_PointCoord - vec2(0.5);
 			float d = length(c);
 			if (d > 0.5) discard;
-			float alpha = smoothstep(0.5, 0.0, d);
-			fragColor = vec4(vColor.rgb, vColor.a * alpha);
+
+			// 双层 Gaussian：紧致核（白热）+ 大柔晕
+			// d=0 → 全亮；d 增大 → 指数衰减
+			// coreSize 控制核紧致程度（小=紧）
+			float coreSigma = uCoreSize;
+			float haloSigma = uCoreSize * uHaloSize;
+			float core = exp(-d * d / (coreSigma * coreSigma));     // 紧致热核
+			float halo = exp(-d * d / (haloSigma * haloSigma));     // 软光晕
+
+			// 边缘抗锯齿：在 0.42..0.5 之间淡出
+			float boundary = smoothstep(0.5, 0.42, d);
+
+			// 热中心：朝白色 lerp，模拟 HDR 过曝感
+			vec3 baseCol = vColor.rgb * vDepthFade;
+			vec3 hotCol  = mix(baseCol, vec3(1.0), core * 0.7);
+
+			// 大气透视：远处粒子色调偏冷蓝（深景）
+			if (uAtmospheric > 0.001) {
+				float far = clamp(vDist / 2000.0, 0.0, 1.0);
+				vec3 atmo = vec3(0.45, 0.55, 0.85);   // 冷蓝
+				hotCol = mix(hotCol, atmo, far * uAtmospheric);
+			}
+
+			// 合成亮度：核 × boost + 光晕 × strength
+			float intensity = (core * (1.0 + uCoreBoost) + halo * uHaloStrength) * boundary;
+
+			// alpha：核区域更实，外晕透明
+			float a = intensity * vColor.a;
+			fragColor = vec4(hotCol * intensity, a);
 		}
 	)";
 

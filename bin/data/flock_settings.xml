@@ -11,15 +11,15 @@
 	<noise_amp>156</noise_amp>
 	<noise_scale>0.009082</noise_scale>
 	<noise_speed>0.24</noise_speed>
-	<vortex_amp>49</vortex_amp>
+	<vortex_amp>77.3516</vortex_amp>
 	<spiral_amp>0</spiral_amp>
-	<curl_amp>0</curl_amp>
+	<curl_amp>101.352</curl_amp>
 	<attractor_amp>63</attractor_amp>
 	<repeller_amp>51</repeller_amp>
-	<flock_sep>0.6</flock_sep>
-	<flock_coh>11.848</flock_coh>
+	<flock_sep>1.625</flock_sep>
+	<flock_coh>13.7</flock_coh>
 	<coh_speed>0.181201</coh_speed>
-	<flock_nbrR>78.9965</flock_nbrR>
+	<flock_nbrR>310.3</flock_nbrR>
 	<merge_dist>6</merge_dist>
 	<spawn_rate>40000</spawn_rate>
 	<min_alive>0.89</min_alive>
@@ -39,7 +39,7 @@
 	<cluster_minMass>44.8</cluster_minMass>
 	<cluster_minCount>27</cluster_minCount>
 	<cluster_cellDensity>2</cluster_cellDensity>
-	<tail_length>0</tail_length>
+	<tail_length>7</tail_length>
 	<tail_audio_sens>0.934219</tail_audio_sens>
 	<tail_alpha>0.45</tail_alpha>
 	<cluster_sensitivity>1</cluster_sensitivity>

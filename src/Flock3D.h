@@ -203,6 +203,13 @@ private:
 	ofParameter<float> tailAlpha;              // trail 整体 alpha
 	float              audioInfluence = 0.0f;  // 来自外部 setAudioInfluence()
 
+	// ─── Material 质感（粒子 shader）───
+	ofParameter<float> matCoreSize;      // 热中心大小（0.05..0.4，越大白核越大）
+	ofParameter<float> matCoreBoost;     // 热中心额外亮度（0..3，HDR 感）
+	ofParameter<float> matHaloSize;      // 外光晕大小（1.0..3.5，越大光晕越宽）
+	ofParameter<float> matHaloStrength;  // 光晕强度（0..2）
+	ofParameter<float> matAtmospheric;   // 大气透视（远的偏冷蓝；0=关）
+
 	// helpers
 	void      resizeParticles();
 	void      respawnFlockParticle(Particle& p);

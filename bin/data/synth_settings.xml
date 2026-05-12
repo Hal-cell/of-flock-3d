@@ -34,25 +34,25 @@
 		<tail_→_idxDecay>0.5</tail_→_idxDecay>
 	</FM>
 	<ClusterDrone>
-		<vol>0.437161</vol>
+		<vol>0.455457</vol>
 		<attack__ms_>3052.81</attack__ms_>
 		<release__ms_>4876.79</release__ms_>
-		<detune>0.00791075</detune>
-		<proximity>384.082</proximity>
-		<cutoff__Hz_>2976.6</cutoff__Hz_>
-		<resonance>0.643109</resonance>
+		<detune>0.00386779</detune>
+		<proximity>400</proximity>
+		<cutoff__Hz_>4535.79</cutoff__Hz_>
+		<resonance>0.78651</resonance>
 	</ClusterDrone>
 	<reverbSize>0.8245</reverbSize>
 	<reverbDamp>0.641934</reverbDamp>
 	<reverb_preDelay__ms_>5.68359</reverb_preDelay__ms_>
 	<Wind>
-		<vol>0.168367</vol>
+		<vol>0.261579</vol>
 		<cutoff__Hz_>1631.63</cutoff__Hz_>
-		<resonance>0.2</resonance>
+		<resonance>0.299707</resonance>
 		<sensitivity>1</sensitivity>
-		<gust_rate__Hz_>0.130612</gust_rate__Hz_>
-		<gust_depth>0.647959</gust_depth>
+		<gust_rate__Hz_>0.156197</gust_rate__Hz_>
+		<gust_depth>0.853416</gust_depth>
 		<base_cutoff__Hz_>100</base_cutoff__Hz_>
-		<amp→cutoff>1</amp→cutoff>
+		<amp→cutoff>1.48882</amp→cutoff>
 	</Wind>
 </Synth>
