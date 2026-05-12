@@ -7,14 +7,22 @@ void Synth::setup(int sr, int bs){
 	sampleRate = sr;
 	bufferSize = bs;
 
-	// 初始化 4 条 delay line（ModalReverb）
-	// 长度为 prime 数（避免反馈周期对齐）
-	int lens[4] = {1499, 1789, 2089, 2531};
-	for (int i = 0; i < 4; i++) {
-		delayLength[i] = lens[i];
-		delayBuf[i].assign(lens[i], 0.0f);
+	// 初始化 4 条 hall reverb delay line（长度对应 hall 空间尺度）
+	// 用质数 ms 数避免反馈周期对齐；4 条 delay 长度跨度比例约 1:1.25:1.55:1.86
+	// → 在 Hadamard 混合下产生密集 ill-correlated 反射
+	float delayMs[NUM_REVERB_DELAYS] = {152.0f, 191.0f, 234.0f, 283.0f};
+	for (int i = 0; i < NUM_REVERB_DELAYS; i++) {
+		int n = std::max(1, (int)(delayMs[i] * 0.001f * sampleRate));
+		delayLength[i] = n;
+		delayBuf[i].assign(n, 0.0f);
 		delayWrite[i] = 0;
+		dampLpState[i] = 0.0f;
 	}
+
+	// Pre-delay buffer：分配 250ms 容量（覆盖 GUI 范围 0..200ms）
+	preDelayBufLen = (int)(0.25f * sampleRate);
+	preDelayBuf.assign(preDelayBufLen, 0.0f);
+	preDelayWrite = 0;
 }
 
 void Synth::buildGui(ofParameterGroup& group){
@@ -27,7 +35,11 @@ void Synth::buildGui(ofParameterGroup& group){
 	group.add(eventGainPerHit.set("hit gain",    0.5f, 0.05f, 1.5f));
 	group.add(minMassToFire.set("minMass",       0.0f, 0.0f, 50.0f));
 	group.add(eventQuantize.set("quantize",      true));
-	group.add(reverbAmt.set("reverbAmt",         0.45f, 0.0f, 1.0f));
+	// ─── Hall Reverb ───
+	group.add(reverbAmt.set("reverbAmt",         0.55f, 0.0f, 1.0f));      // 干湿比
+	group.add(reverbSize.set("reverbSize",       0.85f, 0.0f, 0.97f));     // 长尾控制（0=无反馈，0.97=极长）
+	group.add(reverbDamp.set("reverbDamp",       0.5f,  0.0f, 0.99f));     // HF 衰减
+	group.add(reverbPreDelayMs.set("reverb preDelay (ms)", 20.0f, 0.0f, 200.0f));
 	group.add(rootFreq.set("rootFreq (Hz)",      110.0f, 55.0f, 440.0f));
 	group.add(scaleType.set("scale",             0, 0, int(SCALE_COUNT) - 1));
 
@@ -496,21 +508,64 @@ void Synth::audioOut(ofSoundBuffer& buffer){
 		right += eventSumR;
 
 		// ───────────────────────────────
-		// D. ModalReverb (4-tap FDN)
+		// D. Hall Reverb — Hadamard FDN + HF damping + pre-delay
 		// ───────────────────────────────
 		if (verbAmt > 0.001f) {
-			float inMix = (left + right) * 0.5f * verbAmt;
-			float verbSum = 0;
-			for (int d = 0; d < 4; d++) {
-				float& s = delayBuf[d][delayWrite[d]];
-				verbSum += s;
-				// 反馈写回
-				delayBuf[d][delayWrite[d]] = inMix + s * delayFeedback[d];
-				delayWrite[d] = (delayWrite[d] + 1) % delayLength[d];
+			// 干信号（pre-delay 前）
+			float inMix = (left + right) * 0.5f;
+
+			// Pre-delay：input 先延迟，再喂给 reverb（"距离感"）
+			int preDelaySamples = (int)(reverbPreDelayMs.get() * 0.001f * sampleRate);
+			if (preDelaySamples < 0) preDelaySamples = 0;
+			if (preDelaySamples >= preDelayBufLen) preDelaySamples = preDelayBufLen - 1;
+
+			preDelayBuf[preDelayWrite] = inMix;
+			int preReadIdx = preDelayWrite - preDelaySamples;
+			if (preReadIdx < 0) preReadIdx += preDelayBufLen;
+			float reverbInput = preDelayBuf[preReadIdx];
+			preDelayWrite = (preDelayWrite + 1) % preDelayBufLen;
+
+			// 读 4 条 delay 当前输出
+			float d[NUM_REVERB_DELAYS];
+			for (int k = 0; k < NUM_REVERB_DELAYS; k++) {
+				d[k] = delayBuf[k][delayWrite[k]];
 			}
-			verbSum *= 0.25f;
-			left  += verbSum * verbAmt;
-			right += verbSum * verbAmt;
+
+			// HF damping（每条 delay 自己的 1-pole lowpass）
+			// damp=0 → 系数=1（无衰减，bright）；damp=1 → 系数=0（深度衰减，dark）
+			float dampCoef = 1.0f - reverbDamp.get();
+			if (dampCoef < 0.01f) dampCoef = 0.01f;
+			float damped[NUM_REVERB_DELAYS];
+			for (int k = 0; k < NUM_REVERB_DELAYS; k++) {
+				dampLpState[k] += dampCoef * (d[k] - dampLpState[k]);
+				damped[k] = dampLpState[k];
+			}
+
+			// Hadamard 4×4 mix（能量守恒的"旋转"，把 4 条 delay 互相散开）
+			// h0 =  d0 + d1 + d2 + d3 } 都 *0.5
+			// h1 =  d0 - d1 + d2 - d3
+			// h2 =  d0 + d1 - d2 - d3
+			// h3 =  d0 - d1 - d2 + d3
+			float h[4];
+			h[0] = (damped[0] + damped[1] + damped[2] + damped[3]) * 0.5f;
+			h[1] = (damped[0] - damped[1] + damped[2] - damped[3]) * 0.5f;
+			h[2] = (damped[0] + damped[1] - damped[2] - damped[3]) * 0.5f;
+			h[3] = (damped[0] - damped[1] - damped[2] + damped[3]) * 0.5f;
+
+			// 写回 delay buffer：input + feedback × mixed
+			float feedback = reverbSize.get();
+			if (feedback > 0.97f) feedback = 0.97f;   // 防爆
+			for (int k = 0; k < NUM_REVERB_DELAYS; k++) {
+				delayBuf[k][delayWrite[k]] = reverbInput + h[k] * feedback;
+				delayWrite[k] = (delayWrite[k] + 1) % delayLength[k];
+			}
+
+			// 立体声 spread：d0+d2 → L, d1+d3 → R
+			float verbL = (d[0] + d[2]) * 0.5f;
+			float verbR = (d[1] + d[3]) * 0.5f;
+
+			left  += verbL * verbAmt;
+			right += verbR * verbAmt;
 		}
 
 		// ───────────────────────────────

@@ -163,12 +163,23 @@ private:
 	std::atomic<int> ringWrite{0};
 	std::atomic<int> ringRead{0};
 
-	// ─── ModalReverb（4-tap feedback delay）───
-	// 反馈系数调低 → 中等长度 tail 不掩盖短音细节
-	std::vector<float> delayBuf[4];
-	int  delayWrite[4]    = {0, 0, 0, 0};
-	int  delayLength[4]   = {0, 0, 0, 0};
-	float delayFeedback[4] = {0.55f, 0.52f, 0.48f, 0.45f};
+	// ─── Hall Reverb（FDN: 4 delays + Hadamard mix + HF damping + pre-delay）───
+	// 大空间 hall：长 delay tail (RT60 可达数秒) + 高频自然衰减
+	static constexpr int NUM_REVERB_DELAYS = 4;
+	std::vector<float> delayBuf[NUM_REVERB_DELAYS];
+	int   delayWrite[NUM_REVERB_DELAYS]  = {0, 0, 0, 0};
+	int   delayLength[NUM_REVERB_DELAYS] = {0, 0, 0, 0};
+	float dampLpState[NUM_REVERB_DELAYS] = {0, 0, 0, 0};   // 每条 delay 的 HF damping LP state
+
+	// Pre-delay buffer（在 reverb 前的"空气间隙"，给距离感）
+	std::vector<float> preDelayBuf;
+	int   preDelayWrite  = 0;
+	int   preDelayBufLen = 0;
+
+	// GUI: hall reverb 参数
+	ofParameter<float> reverbSize;       // 反馈量（0..0.97，决定 RT60 长度）
+	ofParameter<float> reverbDamp;       // HF damping（0=不衰减亮；1=深度衰减暗）
+	ofParameter<float> reverbPreDelayMs; // 前置延迟（ms）
 
 	// ─── helpers ───
 	float quantizeToScale(float freq) const;

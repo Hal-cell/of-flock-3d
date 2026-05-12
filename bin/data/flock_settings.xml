@@ -19,7 +19,7 @@
 	<flock_sep>1.55</flock_sep>
 	<flock_coh>19.6</flock_coh>
 	<coh_speed>0.345</coh_speed>
-	<flock_nbrR>97.75</flock_nbrR>
+	<flock_nbrR>82.15</flock_nbrR>
 	<merge_dist>6</merge_dist>
 	<spawn_rate>40000</spawn_rate>
 	<min_alive>0.9</min_alive>
