@@ -349,3 +349,46 @@ ADSR 行为已实现（rp-09），本次只是精简池容量到用户指定的 
 - 加 8-delay FDN 更密集
 - 加 modulated delays（chorused reverb）
 - 实验 plate / cathedral / spring 等不同空间预设
+
+## rp-13 — Particle trails (audio-correlated light beams)
+
+**Commit**: `git tag rp-13-particle-trails` → `a32f814`
+
+**What's new**: 每个粒子拖一条光束尾巴，长度与音频参数正相关。
+
+**轨迹来源**:
+- 每个 Particle 内嵌 24 位环形 buffer 存最近位置
+- 每帧 update 末尾 push 当前 pos
+- Trail 自然展示粒子在 field velocity 下走过的路径
+  （velocity 由 6 个 field 决定，所以 trail 形态 = field 流场轨迹）
+
+**Audio 正相关公式**:
+```
+audio_influence = avg([
+  eventDecayMs   (50..500)   → 0..1,
+  fmRatio        (0.5..8)    → 0..1,
+  clusterCutoff  (80..8000)  → 0..1
+])
+effective_len = base_len × (0.5 + audio_influence × sensitivity × 1.5)
+```
+- 音频静（影响=0）→ 0.5x base
+- 音频满 + sens=1 → 2.0x base
+
+**渲染**:
+- ofMesh OF_PRIMITIVE_LINES，逐段加 alpha fade（oldest=透明 → newest=不透明）
+- 与粒子同在 additive blend pass → 自然光束 glow 感
+
+**新 GUI**:
+| 参数 | 范围 | 默认 |
+|---|---|---|
+| `tail length` | 0..24 | 8 |
+| `tail audio sens` | 0..2 | 1.0 |
+| `tail alpha` | 0..1 | 0.45 |
+
+**性能**: 20K 粒子 × 24 vec3 ≈ 5.5MB 内存；线段最多 20K×23×2 = 920K vertices/frame，
+现代 GPU 60fps 没问题
+
+**Use this checkpoint to**:
+- 加 thickness（geometry shader / quad-billboard）让线条更"实"
+- color gradient（沿 trail 改变颜色，eg field 类型染色）
+- 加 velocity-vector display 调试用
