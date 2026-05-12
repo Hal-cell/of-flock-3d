@@ -55,11 +55,13 @@ void Flock3D::buildGui(ofParameterGroup& group) {
 	group.add(accentChance.set("accent chance",  0.1f, 0.0f, 1.0f));      // 10% 默认
 	group.add(accentSizeMul.set("accent size",   2.5f, 1.0f, 5.0f));      // 普通的 2.5 倍 size
 
-	// ─── Cluster detection（BFS 连通区域 + 总量阈值）───
-	group.add(clusterGridRes.set("cluster grid",       12,   4,   32));
-	group.add(clusterCellDensity.set("cluster cellDensity", 6, 2, 100));
-	group.add(clusterMinCount.set("cluster minCount", 30,  5,  500));
-	group.add(clusterMinMass.set("cluster minMass",   60.0f, 5.0f, 1000.0f));
+	// ─── Cluster detection（相对密度 + BFS 连通区域）───
+	// densityRatio = 3 表示：cell 内粒子数要比均匀分布多 3 倍才算"聚集"
+	// 这是相对阈值，自动适应粒子总数（5K 或 80K 都合理）
+	group.add(clusterGridRes.set("cluster grid",        12,    4,    32));
+	group.add(clusterDensityRatio.set("cluster density ratio", 3.0f, 1.5f, 10.0f));
+	group.add(clusterMinCount.set("cluster minCount",   80,    10,   1000));
+	group.add(clusterMinMass.set("cluster minMass",     200.0f, 10.0f, 5000.0f));
 
 	// ─── Trail（光束尾巴）───
 	// length = baseLen × (0.5 + audio_influence × sensitivity × 1.5)
@@ -647,10 +649,12 @@ std::vector<Flock3D::Cluster> Flock3D::getClusters(int maxK) const {
 	float wr = worldRadius.get();
 	float invScale = (float)gridRes / (wr * 2.0f);
 
-	// 步骤 1：粒子分桶
+	// 步骤 1：粒子分桶（同时统计 alive 总数，用于动态阈值）
+	int aliveTotalCount = 0;
 	for (const auto& p : particles) {
 		if (!p.alive) continue;
 		if (p.fadeOutTimer >= 0) continue;
+		aliveTotalCount++;
 
 		int ix = (int)((p.pos.x + wr) * invScale);
 		int iy = (int)((p.pos.y + wr) * invScale);
@@ -670,7 +674,10 @@ std::vector<Flock3D::Cluster> Flock3D::getClusters(int maxK) const {
 		cell.colB += p.color.b;
 	}
 
-	int cellDensity = std::max(2, (int)clusterCellDensity);
+	// 动态阈值：cell 内粒子数 ≥ (均匀分布平均值 × ratio) 才算"密集"
+	// 这样均匀分布的随机波动不会触发，只有真正聚集到 ratio 倍以上才算
+	float avgDensity = (totalCells > 0) ? (float)aliveTotalCount / (float)totalCells : 0.0f;
+	int cellDensity = std::max(2, (int)(avgDensity * clusterDensityRatio.get()));
 	int minCount    = (int)clusterMinCount;
 	float minMass   = clusterMinMass;
 
