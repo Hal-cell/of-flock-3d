@@ -17,9 +17,9 @@
 	<attractor_amp>63</attractor_amp>
 	<repeller_amp>51</repeller_amp>
 	<flock_sep>0.6</flock_sep>
-	<flock_coh>6.85781</flock_coh>
-	<coh_speed>0.146445</coh_speed>
-	<flock_nbrR>124.227</flock_nbrR>
+	<flock_coh>11.848</flock_coh>
+	<coh_speed>0.181201</coh_speed>
+	<flock_nbrR>346.337</flock_nbrR>
 	<merge_dist>6</merge_dist>
 	<spawn_rate>40000</spawn_rate>
 	<min_alive>0.89</min_alive>
@@ -32,7 +32,7 @@
 	<fadeIn_frames>20</fadeIn_frames>
 	<fadeOut_frames>30</fadeOut_frames>
 	<flash_frames>24</flash_frames>
-	<flash_intensity>2</flash_intensity>
+	<flash_intensity>1.2848</flash_intensity>
 	<accent_chance>0.037625</accent_chance>
 	<accent_size>2.48</accent_size>
 	<cluster_grid>8</cluster_grid>
@@ -42,5 +42,5 @@
 	<tail_length>0</tail_length>
 	<tail_audio_sens>0.934219</tail_audio_sens>
 	<tail_alpha>0.45</tail_alpha>
-	<cluster_sensitivity>0.532891</cluster_sensitivity>
+	<cluster_sensitivity>1</cluster_sensitivity>
 </Flock_3D>

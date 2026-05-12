@@ -675,15 +675,19 @@ std::vector<Flock3D::Cluster> Flock3D::getClusters(int maxK) const {
 		cell.colB += p.color.b;
 	}
 
-	// 步骤 2：从 sensitivity 派生 cell 阈值 + 整 cluster 阈值
-	// sens 0 = 严格：cell 要比均匀密 8 倍，cluster ≥ 80 粒
-	// sens 1 = 宽松：cell 要比均匀密 1.5 倍，cluster ≥ 15 粒
-	float cellRatio = 8.0f - sens * 6.5f;           // 8 → 1.5
-	int   minCount  = (int)(80.0f - sens * 65.0f);  // 80 → 15
+	// 步骤 2：从 sensitivity 派生 seed + expand 双阈值
+	//   seed：BFS 起点 cell 必须显著高于均匀（防止从随机噪声 cell 启动）
+	//   expand：BFS 扩展时，邻居 cell 也必须高于均匀（防止串到所有 cell 把多个 cluster 缝成一个）
+	// sens 0 严格：seed=8x avg, expand=4x avg, minCount=80
+	// sens 1 宽松：seed=1.5x avg, expand=1.15x avg, minCount=15
+	//   关键：expand 永远 > 1.0x（高于均匀），所以不会通过随机 cell 把 cluster 们错误合并
+	float seedRatio   = 8.0f - sens * 6.5f;          // 8 → 1.5
+	float expandRatio = 4.0f - sens * 2.85f;         // 4 → 1.15
+	int   minCount    = (int)(80.0f - sens * 65.0f); // 80 → 15
 
-	// 自适应：阈值 = 均匀分布平均 × cellRatio（不受粒子总数影响）
 	float avgDensity = (totalCells > 0) ? (float)aliveCount / (float)totalCells : 0.0f;
-	int   cellDensity = std::max(2, (int)(avgDensity * cellRatio));
+	int   seedDensity   = std::max(2, (int)(avgDensity * seedRatio));
+	int   expandDensity = std::max(2, (int)(avgDensity * expandRatio));
 
 	// 步骤 2-3：BFS 合并相邻密集 cell
 	std::vector<bool> visited(totalCells, false);
@@ -699,7 +703,7 @@ std::vector<Flock3D::Cluster> Flock3D::getClusters(int maxK) const {
 			for (int x = 0; x < gridRes; x++) {
 				int idx = cellIdx3(x, y, z);
 				if (visited[idx]) continue;
-				if (grid[idx].count < cellDensity) continue;
+				if (grid[idx].count < seedDensity) continue;   // 起点用 seed 阈值
 
 				// BFS：种子在 (x,y,z)，扩展到所有邻接密集 cell
 				Cluster c;
@@ -745,8 +749,8 @@ std::vector<Flock3D::Cluster> Flock3D::getClusters(int maxK) const {
 						if (nz < 0 || nz >= gridRes) continue;
 						int nIdx = cellIdx3(nx, ny, nz);
 						if (visited[nIdx]) continue;
-						// 邻居只要"半密集"就并入（拓展性更柔和）
-						if (grid[nIdx].count < std::max(2, cellDensity / 2)) continue;
+						// 邻居用 expand 阈值（必须高于均匀，避免错误连接到其他 cluster）
+						if (grid[nIdx].count < expandDensity) continue;
 						visited[nIdx] = true;
 						stack.push_back(nIdx);
 					}
