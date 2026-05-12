@@ -13,11 +13,11 @@
 	<noise_speed>0.24</noise_speed>
 	<vortex_amp>43</vortex_amp>
 	<spiral_amp>39</spiral_amp>
-	<curl_amp>156</curl_amp>
+	<curl_amp>86</curl_amp>
 	<attractor_amp>94</attractor_amp>
 	<repeller_amp>51</repeller_amp>
 	<flock_sep>0.6</flock_sep>
-	<flock_coh>9.9</flock_coh>
+	<flock_coh>7.1</flock_coh>
 	<coh_speed>0.1875</coh_speed>
 	<flock_nbrR>10</flock_nbrR>
 	<merge_dist>6</merge_dist>

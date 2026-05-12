@@ -70,14 +70,15 @@ void Synth::buildGui(ofParameterGroup& group){
 	clusterDroneGroup.add(clusterResonance.set("resonance",   0.3f,   0.0f,  0.95f));
 	group.add(clusterDroneGroup);
 
-	// ─── Wind 子组（持续滤波噪声，音量绑 field amp 总和）───
+	// ─── Wind 子组（持续滤波噪声；field amp → cutoff）───
+	// 音量独立 slider；field amp 总和 0..1 把 cutoff 抬高
 	windGroup.setName("Wind");
-	windGroup.add(windVol.set("vol",             0.4f,    0.0f,  1.0f));
-	windGroup.add(windCutoff.set("cutoff (Hz)",  1500.0f, 100.0f, 8000.0f));
-	windGroup.add(windResonance.set("resonance", 0.2f,    0.0f,  0.9f));
-	windGroup.add(windSensitivity.set("sensitivity", 1.0f, 0.1f, 3.0f));
-	windGroup.add(windLfoRate.set("gust rate (Hz)",  0.4f, 0.05f, 4.0f));
-	windGroup.add(windLfoDepth.set("gust depth",    0.4f, 0.0f,  1.0f));
+	windGroup.add(windVol.set("vol",                 0.4f,    0.0f,    1.0f));
+	windGroup.add(windCutoff.set("base cutoff (Hz)", 800.0f,  100.0f,  8000.0f));
+	windGroup.add(windResonance.set("resonance",     0.2f,    0.0f,    0.9f));
+	windGroup.add(windAmpToCutoff.set("amp→cutoff",  1.0f,    0.0f,    3.0f));  // amp 满时最多加 4kHz × 此值
+	windGroup.add(windLfoRate.set("gust rate (Hz)",  0.4f,    0.05f,   4.0f));
+	windGroup.add(windLfoDepth.set("gust depth",     0.4f,    0.0f,    1.0f));
 	group.add(windGroup);
 }
 
@@ -430,14 +431,13 @@ void Synth::audioOut(ofSoundBuffer& buffer){
 	float detuneRatios[3] = {1.0f, 1.0f + detune, 1.0f - detune};
 
 	// ─── 预算 Wind 层参数（per-buffer，每 sample 不变）───
-	float wndVol = windVol;
-	float wndCutoffBase = ofClamp(windCutoff.get(), 50.0f, sampleRate * 0.4f);
+	float wndVol = windVol;                                                    // 独立音量
+	float wndCutoffBase = ofClamp(windCutoff.get(), 50.0f, sampleRate * 0.4f); // base cutoff
 	float wndQ = 1.0f - ofClamp(windResonance.get(), 0.0f, 0.95f);
 	if (wndQ < 0.05f) wndQ = 0.05f;
-	float wndSens = windSensitivity;
 	float wndFieldAmp = a_fieldAmpTotal.load();   // 0..1
-	// power curve：sensitivity > 1 → 加速；< 1 → 平滑（开始一点就响）
-	float wndAmpScaled = powf(wndFieldAmp, 1.0f / std::max(wndSens, 0.01f));
+	// amp 把 cutoff 抬高：amp=1 + depth=1 → +4000Hz；depth=3 → +12000Hz
+	float wndAmpCutoffShift = wndFieldAmp * windAmpToCutoff.get() * 4000.0f;
 	float wndLfoIncr = ofClamp(windLfoRate.get(), 0.0f, 10.0f) / sampleRate;
 	float wndLfoD = windLfoDepth;
 
@@ -554,12 +554,15 @@ void Synth::audioOut(ofSoundBuffer& buffer){
 		// LFO 微调 cutoff → 风阵 gust 感
 		// 信号在 reverb 之前，因此也会被 hall reverb 处理
 		// ───────────────────────────────
-		if (wndVol > 0.001f && wndAmpScaled > 0.001f) {
+		if (wndVol > 0.001f) {
 			// LFO 调制 cutoff（gust）
 			windLfoPhase += wndLfoIncr;
 			if (windLfoPhase >= 1.0f) windLfoPhase -= 1.0f;
 			float lfo = sinf(windLfoPhase * TWO_PI);   // -1..1
-			float curCutoff = wndCutoffBase * (1.0f + lfo * wndLfoD * 0.6f);
+
+			// 综合 cutoff = (base + amp 抬高) × LFO 调制因子
+			// field amp 高 → 风更亮锐；amp 低 → 风暗闷
+			float curCutoff = (wndCutoffBase + wndAmpCutoffShift) * (1.0f + lfo * wndLfoD * 0.6f);
 			if (curCutoff < 50.0f) curCutoff = 50.0f;
 			if (curCutoff > sampleRate * 0.4f) curCutoff = sampleRate * 0.4f;
 			float wndFc = 2.0f * sinf(PI * curCutoff / sampleRate);
@@ -579,8 +582,9 @@ void Synth::audioOut(ofSoundBuffer& buffer){
 			float highR = nR - windSvfLowR - wndQ * windSvfBandR;
 			windSvfBandR += wndFc * highR;
 
-			float wL = windSvfLowL * wndVol * wndAmpScaled;
-			float wR = windSvfLowR * wndVol * wndAmpScaled;
+			// 音量独立（不被 field amp 影响）
+			float wL = windSvfLowL * wndVol;
+			float wR = windSvfLowR * wndVol;
 
 			left  += wL;
 			right += wR;

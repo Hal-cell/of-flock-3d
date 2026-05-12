@@ -90,14 +90,14 @@ private:
 	ofParameter<float> tailToIdxDecayDepth; // tail 长度对 fmIdxDecay 的调制深度（0..1）
 
 	// ─── Wind 层参数（持续滤波噪声，模拟风声）───
-	// 音量 ∝ field amp 总和（field 越强 → 风越响）
-	// 经过 SVF lowpass，立体声独立噪声 → 自然空间感
-	// 信号在 hall reverb 之前混入，因此也会被 reverb 处理
+	// 音量手动控制（vol slider）；field amp 总和 → 调制 cutoff（field 越强 → 风越亮锐）
+	// SVF lowpass + 立体声独立噪声 → 自然空间感
+	// 信号在 hall reverb 之前混入，会被 reverb 处理
 	ofParameterGroup   windGroup;
-	ofParameter<float> windVol;         // 总音量
-	ofParameter<float> windCutoff;      // SVF lowpass cutoff (Hz)
+	ofParameter<float> windVol;         // 总音量（与 field amp 无关）
+	ofParameter<float> windCutoff;      // base cutoff (Hz)
 	ofParameter<float> windResonance;   // 0..0.95，high = "whistle" 风口哨
-	ofParameter<float> windSensitivity; // field amp → vol 映射的 power curve
+	ofParameter<float> windAmpToCutoff; // field amp 对 cutoff 的调制深度
 	ofParameter<float> windLfoRate;     // gust 风阵 LFO 速率 (Hz)
 	ofParameter<float> windLfoDepth;    // gust 风阵 LFO 深度（0..1，调制 cutoff）
 
