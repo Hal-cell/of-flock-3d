@@ -46,11 +46,13 @@
 	<reverbDamp>0.641934</reverbDamp>
 	<reverb_preDelay__ms_>5.68359</reverb_preDelay__ms_>
 	<Wind>
-		<vol>0.255102</vol>
+		<vol>0.168367</vol>
 		<cutoff__Hz_>1631.63</cutoff__Hz_>
 		<resonance>0.2</resonance>
 		<sensitivity>1</sensitivity>
-		<gust_rate__Hz_>0.4</gust_rate__Hz_>
-		<gust_depth>0.4</gust_depth>
+		<gust_rate__Hz_>0.05</gust_rate__Hz_>
+		<gust_depth>0.265306</gust_depth>
+		<base_cutoff__Hz_>800</base_cutoff__Hz_>
+		<amp→cutoff>1</amp→cutoff>
 	</Wind>
 </Synth>

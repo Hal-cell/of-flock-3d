@@ -11,10 +11,10 @@
 	<noise_amp>156</noise_amp>
 	<noise_scale>0.009082</noise_scale>
 	<noise_speed>0.24</noise_speed>
-	<vortex_amp>43</vortex_amp>
-	<spiral_amp>39</spiral_amp>
-	<curl_amp>86</curl_amp>
-	<attractor_amp>94</attractor_amp>
+	<vortex_amp>6</vortex_amp>
+	<spiral_amp>0</spiral_amp>
+	<curl_amp>0</curl_amp>
+	<attractor_amp>63</attractor_amp>
 	<repeller_amp>51</repeller_amp>
 	<flock_sep>0.6</flock_sep>
 	<flock_coh>7.1</flock_coh>

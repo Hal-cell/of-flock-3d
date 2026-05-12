@@ -83,12 +83,12 @@ public:
 		return t;
 	}
 
-	// 6 个 field amp 总和归一化（0..1），给 Synth 风声音量用
-	// 单个 amp 上限 200，6 个全开 = 1200；用 / 400 作归一化分母
-	// → 一个 field=200 → 0.5；两个 field=100+100 → 0.5；满天飞 → 1.0
+	// "流动型" field amp 总和归一化（0..1），给 Synth 风声 cutoff 用
+	// 只用 vortex + spiral + curl（"风感"的 field，不算 noise/attractor/repeller）
+	// 单个 amp 上限 200，3 个全开 = 600；用 / 400 作归一化分母
+	// → 一个 field=200 → 0.5；两个 field=200+200 → 1.0；三个全满 → clamp 1.0
 	float getFieldAmpTotal() const {
-		float total = noiseAmplitude + vortexAmp + spiralAmp + curlAmp
-		            + attractorAmp + repellerAmp;
+		float total = vortexAmp + spiralAmp + curlAmp;
 		float norm = total / 400.0f;
 		if (norm < 0.0f) norm = 0.0f;
 		if (norm > 1.0f) norm = 1.0f;
