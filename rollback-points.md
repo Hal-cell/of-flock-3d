@@ -418,3 +418,33 @@ effective_len = base_len × (0.5 + audio_influence × sensitivity × 1.5)
 - 进一步优化：用 ofVbo + GL_LINES + 持久映射 buffer
 - 用 geometry shader 扩展 lines 成 quad（更厚的光束）
 - LOD 系统（远处粒子只画粒子不画 trail）
+
+## rp-15 — Tail length drives FM ratio + event decay (reverse direction)
+
+**Commit**: `git tag rp-15-tail-drives-audio` → `265df20`
+
+**Change**: tail length 现在反向驱动 FM ratio 和 event decay。
+
+**避免反馈循环的拆分**:
+| 方向 | 涉及参数 |
+|---|---|
+| audio → visual | cluster cutoff 影响 tail length |
+| visual → audio | tail length 影响 FM ratio + event decay |
+| 解耦 | cutoff 不被 tail 驱动；FM/decay 不参与 audio→tail |
+
+三个正相关关系（tail ↔ cutoff, tail ↔ FM, tail ↔ decay）全保留，但因果链无循环。
+
+**调制公式**:
+```
+effFmRatio = baseFmRatio + tailInfluence × tailToFmDepth × 4.0
+effDecayMs = baseDecayMs + tailInfluence × tailToDecayDepth × 400ms
+```
+其中 `tailInfluence = tail length GUI 值 / TRAIL_MAX (0..1)`
+
+**新 GUI（FM 子组下）**:
+- `tail → FM` (0..1, 默认 0.5)
+- `tail → decay` (0..1, 默认 0.5)
+
+**Use this checkpoint to**:
+- 加更多 visual → audio 映射（速度 → 颤音、密度 → 滤波、color → 音色）
+- 把 tail → audio 也设成可正可负（双向调制）
