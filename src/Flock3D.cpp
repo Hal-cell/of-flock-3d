@@ -55,13 +55,13 @@ void Flock3D::buildGui(ofParameterGroup& group) {
 	group.add(accentChance.set("accent chance",  0.1f, 0.0f, 1.0f));      // 10% 默认
 	group.add(accentSizeMul.set("accent size",   2.5f, 1.0f, 5.0f));      // 普通的 2.5 倍 size
 
-	// ─── Cluster detection（相对密度 + BFS 连通区域）───
-	// densityRatio = 3 表示：cell 内粒子数要比均匀分布多 3 倍才算"聚集"
-	// 这是相对阈值，自动适应粒子总数（5K 或 80K 都合理）
-	group.add(clusterGridRes.set("cluster grid",        12,    4,    32));
-	group.add(clusterDensityRatio.set("cluster density ratio", 3.0f, 1.5f, 10.0f));
-	group.add(clusterMinCount.set("cluster minCount",   80,    10,   1000));
-	group.add(clusterMinMass.set("cluster minMass",     200.0f, 10.0f, 5000.0f));
+	// ─── Cluster detection（碰撞热点：碰撞集中在小区域 → cluster）───
+	// 维护 N 帧滑动窗口的碰撞历史，按位置 spatial hash
+	// 热点 cell（≥ minHitsPerCell 次碰撞）BFS 合并 → 总碰撞 ≥ minTotalHits 算 cluster
+	group.add(clusterGridRes.set("cluster grid",         16,    4,    32));
+	group.add(collisionWindowFrames.set("collision window",  60,  10,  300));
+	group.add(minHitsPerCell.set("min hits per cell",     3,   1,   50));
+	group.add(clusterMinCount.set("cluster min hits",     8,   2,   200));
 
 	// ─── Trail（光束尾巴）───
 	// length = baseLen × (0.5 + audio_influence × sensitivity × 1.5)
@@ -393,6 +393,20 @@ void Flock3D::update(){
 		p.trailWriteIdx = (p.trailWriteIdx + 1) % TRAIL_MAX;
 		if (p.trailCount < TRAIL_MAX) p.trailCount++;
 	}
+
+	// ─── 6. Collision history（cluster 检测用）───
+	// 把本帧碰撞推入历史，旧的 age++，超出 window 的删除
+	int window = collisionWindowFrames;
+	for (auto& r : collisionHistory) r.frameAge++;
+	collisionHistory.erase(
+		std::remove_if(collisionHistory.begin(), collisionHistory.end(),
+			[window](const CollisionRecord& r){ return r.frameAge > window; }),
+		collisionHistory.end()
+	);
+	// 把本帧的 collision events 加入历史（age=0）
+	for (const auto& ev : collisionsThisFrame) {
+		collisionHistory.push_back({ev.pos, ev.newMass, ev.color, 0});
+	}
 }
 
 //==============================================================
@@ -626,11 +640,14 @@ Flock3D::Stats Flock3D::getStats() const {
 }
 
 //--------------------------------------------------------------
-//  Cluster detection（grid hash + BFS 连通区域合并）
-//  - 步骤 1：把粒子塞进 3D grid
-//  - 步骤 2：找种子 cell（density ≥ cellDensity）
-//  - 步骤 3：BFS 把相邻密集 cell 合并成一个 cluster
-//  - 步骤 4：用 minCount / minMass 过滤掉太小的 cluster
+//  Cluster detection（基于碰撞热点）
+//  - 把 collisionHistory 按位置分桶到 3D grid
+//  - 找"热点 cell"（hits ≥ minHitsPerCell）
+//  - BFS 合并相邻热点
+//  - 总 hits ≥ minTotalHits 才算 cluster
+//
+//  优点：碰撞只在真聚集时频繁出现 → 没聚集 = 没碰撞 = 没 cluster
+//        与粒子总数无关，自然过滤掉均匀分布的"假阳性"
 //--------------------------------------------------------------
 std::vector<Flock3D::Cluster> Flock3D::getClusters(int maxK) const {
 	int gridRes = clusterGridRes;
@@ -638,10 +655,9 @@ std::vector<Flock3D::Cluster> Flock3D::getClusters(int maxK) const {
 	int totalCells = gridRes * gridRes * gridRes;
 
 	struct Cell {
-		float mass = 0.0f;
-		int   count = 0;
+		int   hits = 0;
+		float massSum = 0.0f;
 		glm::vec3 posSum{0};
-		glm::vec3 velSum{0};
 		float colR = 0, colG = 0, colB = 0;
 	};
 	std::vector<Cell> grid(totalCells);
@@ -649,37 +665,27 @@ std::vector<Flock3D::Cluster> Flock3D::getClusters(int maxK) const {
 	float wr = worldRadius.get();
 	float invScale = (float)gridRes / (wr * 2.0f);
 
-	// 步骤 1：粒子分桶（同时统计 alive 总数，用于动态阈值）
-	int aliveTotalCount = 0;
-	for (const auto& p : particles) {
-		if (!p.alive) continue;
-		if (p.fadeOutTimer >= 0) continue;
-		aliveTotalCount++;
-
-		int ix = (int)((p.pos.x + wr) * invScale);
-		int iy = (int)((p.pos.y + wr) * invScale);
-		int iz = (int)((p.pos.z + wr) * invScale);
+	// 步骤 1：把所有碰撞事件分桶
+	for (const auto& r : collisionHistory) {
+		int ix = (int)((r.pos.x + wr) * invScale);
+		int iy = (int)((r.pos.y + wr) * invScale);
+		int iz = (int)((r.pos.z + wr) * invScale);
 		if (ix < 0 || ix >= gridRes) continue;
 		if (iy < 0 || iy >= gridRes) continue;
 		if (iz < 0 || iz >= gridRes) continue;
 
 		int idx = ix + iy * gridRes + iz * gridRes * gridRes;
 		Cell& cell = grid[idx];
-		cell.mass  += p.mass;
-		cell.count++;
-		cell.posSum += p.pos;
-		cell.velSum += p.velocity;
-		cell.colR += p.color.r;
-		cell.colG += p.color.g;
-		cell.colB += p.color.b;
+		cell.hits++;
+		cell.massSum += r.mass;
+		cell.posSum += r.pos;
+		cell.colR += r.color.r;
+		cell.colG += r.color.g;
+		cell.colB += r.color.b;
 	}
 
-	// 动态阈值：cell 内粒子数 ≥ (均匀分布平均值 × ratio) 才算"密集"
-	// 这样均匀分布的随机波动不会触发，只有真正聚集到 ratio 倍以上才算
-	float avgDensity = (totalCells > 0) ? (float)aliveTotalCount / (float)totalCells : 0.0f;
-	int cellDensity = std::max(2, (int)(avgDensity * clusterDensityRatio.get()));
-	int minCount    = (int)clusterMinCount;
-	float minMass   = clusterMinMass;
+	int minPerCell = std::max(1, (int)minHitsPerCell);
+	int minTotal   = std::max(1, (int)clusterMinCount);
 
 	// 步骤 2-3：BFS 合并相邻密集 cell
 	std::vector<bool> visited(totalCells, false);
@@ -695,13 +701,12 @@ std::vector<Flock3D::Cluster> Flock3D::getClusters(int maxK) const {
 			for (int x = 0; x < gridRes; x++) {
 				int idx = cellIdx3(x, y, z);
 				if (visited[idx]) continue;
-				if (grid[idx].count < cellDensity) continue;
+				if (grid[idx].hits < minPerCell) continue;
 
-				// BFS：种子在 (x,y,z)，扩展到所有邻接密集 cell
-				Cluster c;
+				// BFS：种子是 hits ≥ minPerCell 的 cell，扩展到邻接热点
+				int      sumHits = 0;
 				float    sumMass = 0;
-				int      sumCount = 0;
-				glm::vec3 sumPos(0), sumVel(0);
+				glm::vec3 sumPos(0);
 				float    sumR = 0, sumG = 0, sumB = 0;
 
 				std::vector<int> stack;
@@ -714,19 +719,17 @@ std::vector<Flock3D::Cluster> Flock3D::getClusters(int maxK) const {
 					stack.pop_back();
 
 					const Cell& cell = grid[curIdx];
-					sumMass  += cell.mass;
-					sumCount += cell.count;
-					sumPos   += cell.posSum;
-					sumVel   += cell.velSum;
-					sumR     += cell.colR;
-					sumG     += cell.colG;
-					sumB     += cell.colB;
+					sumHits += cell.hits;
+					sumMass += cell.massSum;
+					sumPos  += cell.posSum;
+					sumR    += cell.colR;
+					sumG    += cell.colG;
+					sumB    += cell.colB;
 
 					int cz = curIdx / (gridRes * gridRes);
 					int cy = (curIdx / gridRes) % gridRes;
 					int cx = curIdx % gridRes;
 
-					// 6 个面邻居（不算对角，足够稳定）
 					int neighbors[6][3] = {
 						{cx-1, cy, cz}, {cx+1, cy, cz},
 						{cx, cy-1, cz}, {cx, cy+1, cz},
@@ -741,21 +744,22 @@ std::vector<Flock3D::Cluster> Flock3D::getClusters(int maxK) const {
 						if (nz < 0 || nz >= gridRes) continue;
 						int nIdx = cellIdx3(nx, ny, nz);
 						if (visited[nIdx]) continue;
-						// 邻居只要"半密集"就并入（拓展性更柔和）
-						if (grid[nIdx].count < std::max(2, cellDensity / 2)) continue;
+						// 邻居只要"半热点"就并入（让 cluster 更稳定）
+						if (grid[nIdx].hits < std::max(1, minPerCell / 2)) continue;
 						visited[nIdx] = true;
 						stack.push_back(nIdx);
 					}
 				}
 
-				// 步骤 4：cluster 是否成立
-				if (sumCount < minCount || sumMass < minMass) continue;
+				// 总 hits 不够 → 不算 cluster
+				if (sumHits < minTotal) continue;
 
+				Cluster c;
+				c.particleCount = sumHits;        // 复用：现在表示"累计碰撞次数"
 				c.totalMass     = sumMass;
-				c.particleCount = sumCount;
-				float invN = 1.0f / (float)sumCount;
+				float invN = 1.0f / (float)sumHits;
 				c.centroid  = sumPos * invN;
-				c.velocity  = sumVel * invN;
+				c.velocity  = glm::vec3(0);        // 碰撞历史不带 velocity
 				c.avgColor  = ofFloatColor(sumR * invN, sumG * invN, sumB * invN, 1.0f);
 				clusters.push_back(c);
 			}

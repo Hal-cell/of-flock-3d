@@ -111,6 +111,15 @@ private:
 
 	std::vector<Particle> particles;
 	std::vector<CollisionEvent> collisionsThisFrame;   // 每帧清空，update 内累积
+
+	// 碰撞历史滑动窗口（cluster 检测用）
+	struct CollisionRecord {
+		glm::vec3    pos;
+		float        mass;
+		ofFloatColor color;
+		int          frameAge;   // 0=本帧；老的逐帧 ++
+	};
+	std::vector<CollisionRecord> collisionHistory;
 	ofEasyCam cam;
 	ofShader  particleShader;
 
@@ -170,14 +179,14 @@ private:
 	ofParameter<float> accentChance;    // 0..1，每次 merge 命中的概率
 	ofParameter<float> accentSizeMul;   // accent flash 的 size 倍率
 
-	// ─── Cluster detection（BFS 连通区域 + 相对密度阈值）───
-	// "聚集" 的定义：cell 密度显著高于均匀分布
-	// 阈值 = (alive 总数 / cell 数) × densityRatio
-	// 这样不管粒子多少，都只检测"真聚集"，不被均匀分布的随机波动触发
-	ofParameter<int>   clusterGridRes;     // 3D grid 分辨率
-	ofParameter<float> clusterDensityRatio;// 密度阈值倍率（avg × 此值 = cellDensity）
-	ofParameter<int>   clusterMinCount;    // 整个 cluster 总粒子数下限
-	ofParameter<float> clusterMinMass;     // 整个 cluster 总质量下限
+	// ─── Cluster detection（基于碰撞热点的检测）───
+	// 思路：collision events 出现在小区域内频繁 = 粒子真在挤压聚集
+	// 维护 N 帧滑动窗口的碰撞历史，按位置 spatial hash
+	// 热点 cell（hits ≥ minHitsPerCell）BFS 合并后总 hits ≥ minTotalHits → cluster
+	ofParameter<int>   clusterGridRes;        // 3D grid 分辨率
+	ofParameter<int>   collisionWindowFrames; // 碰撞历史窗口（帧数；60 ≈ 1 秒）
+	ofParameter<int>   minHitsPerCell;        // cell 内最少多少次碰撞算"热点"
+	ofParameter<int>   clusterMinCount;       // 整个 cluster 累计碰撞次数下限
 
 	// ─── Trail（光束尾巴）───
 	// 长度 = baseTailLen × (0.5 + audioInfluence × tailAudioSensitivity × 1.5)
