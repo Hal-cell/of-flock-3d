@@ -623,19 +623,14 @@ Flock3D::Stats Flock3D::getStats() const {
 }
 
 //--------------------------------------------------------------
-//  Cluster detection（grid hash + BFS 连通区域合并）
-//  - 步骤 1：把粒子塞进 3D grid + 统计 alive 数
-//  - 步骤 2：从 sensitivity 派生：cellDensity（相对均匀分布的倍率）+ minCount
-//  - 步骤 3：找密度过阈的 cell，BFS 合并相邻
-//  - 步骤 4：cluster 总粒子数 ≥ minCount 才成立
+//  Cluster detection（极简版：grid 分区 + 每 cell 阈值）
+//  - 世界切成 5×5×5 = 125 个 cell
+//  - 每 cell 数粒子
+//  - 超过阈值的 cell 就是一个 cluster（不合并，每个独立）
+//  - 阈值 = avg × (5 - sens × 3.5)：sens=0 → 5x avg；sens=1 → 1.5x avg
 //--------------------------------------------------------------
 std::vector<Flock3D::Cluster> Flock3D::getClusters(int maxK) const {
-	// 三个参数都从 sensitivity 派生，但 gridRes 是关键修复：
-	// sens=0 严格：gridRes=14（细 cell，要求高密度）
-	// sens=1 宽松：gridRes=5（粗 cell，让聚集压缩到 1-3 cell 里 → 单 cell 计数能上去）
-	float sens = ofClamp(clusterSensitivity.get(), 0.0f, 1.0f);
-	int gridRes = (int)(14 - sens * 9.0f);   // 14 → 5
-	if (gridRes < 4) gridRes = 4;
+	const int gridRes = 5;   // 5³ = 125 cells，cell 大约 100 单位 @ 默认 world
 	int totalCells = gridRes * gridRes * gridRes;
 
 	struct Cell {
@@ -675,101 +670,33 @@ std::vector<Flock3D::Cluster> Flock3D::getClusters(int maxK) const {
 		cell.colB += p.color.b;
 	}
 
-	// 步骤 2：从 sensitivity 派生 seed + expand 双阈值
-	//   seed：BFS 起点 cell 必须显著高于均匀（防止从随机噪声 cell 启动）
-	//   expand：BFS 扩展时，邻居 cell 也必须高于均匀（防止串到所有 cell 把多个 cluster 缝成一个）
-	// sens 0 严格：seed=8x avg, expand=4x avg, minCount=80
-	// sens 1 宽松：seed=1.5x avg, expand=1.15x avg, minCount=15
-	//   关键：expand 永远 > 1.0x（高于均匀），所以不会通过随机 cell 把 cluster 们错误合并
-	float seedRatio   = 8.0f - sens * 6.5f;          // 8 → 1.5
-	float expandRatio = 4.0f - sens * 2.85f;         // 4 → 1.15
-	int   minCount    = (int)(80.0f - sens * 65.0f); // 80 → 15
-
+	// 阈值：avg × ratio
+	//   sens=0 严格：5x avg（cell 要明显比均匀密 5 倍才算）
+	//   sens=1 宽松：1.5x avg（仅 1.5 倍即算）
+	float sens = ofClamp(clusterSensitivity.get(), 0.0f, 1.0f);
+	float ratio = 5.0f - sens * 3.5f;
 	float avgDensity = (totalCells > 0) ? (float)aliveCount / (float)totalCells : 0.0f;
-	int   seedDensity   = std::max(2, (int)(avgDensity * seedRatio));
-	int   expandDensity = std::max(2, (int)(avgDensity * expandRatio));
+	int   cellThreshold = std::max(2, (int)(avgDensity * ratio));
 
-	// 步骤 2-3：BFS 合并相邻密集 cell
-	std::vector<bool> visited(totalCells, false);
+	// 每个超阈 cell 直接成为一个 cluster（不合并、不 BFS）
 	std::vector<Cluster> clusters;
-	clusters.reserve(maxK + 4);
+	clusters.reserve(maxK + 8);
 
-	auto cellIdx3 = [gridRes](int x, int y, int z) {
-		return x + y * gridRes + z * gridRes * gridRes;
-	};
+	for (int idx = 0; idx < totalCells; idx++) {
+		const Cell& cell = grid[idx];
+		if (cell.count < cellThreshold) continue;
 
-	for (int z = 0; z < gridRes; z++) {
-		for (int y = 0; y < gridRes; y++) {
-			for (int x = 0; x < gridRes; x++) {
-				int idx = cellIdx3(x, y, z);
-				if (visited[idx]) continue;
-				if (grid[idx].count < seedDensity) continue;   // 起点用 seed 阈值
-
-				// BFS：种子在 (x,y,z)，扩展到所有邻接密集 cell
-				Cluster c;
-				float    sumMass = 0;
-				int      sumCount = 0;
-				glm::vec3 sumPos(0), sumVel(0);
-				float    sumR = 0, sumG = 0, sumB = 0;
-
-				std::vector<int> stack;
-				stack.reserve(32);
-				stack.push_back(idx);
-				visited[idx] = true;
-
-				while (!stack.empty()) {
-					int curIdx = stack.back();
-					stack.pop_back();
-
-					const Cell& cell = grid[curIdx];
-					sumMass  += cell.mass;
-					sumCount += cell.count;
-					sumPos   += cell.posSum;
-					sumVel   += cell.velSum;
-					sumR     += cell.colR;
-					sumG     += cell.colG;
-					sumB     += cell.colB;
-
-					int cz = curIdx / (gridRes * gridRes);
-					int cy = (curIdx / gridRes) % gridRes;
-					int cx = curIdx % gridRes;
-
-					// 6 个面邻居（不算对角，足够稳定）
-					int neighbors[6][3] = {
-						{cx-1, cy, cz}, {cx+1, cy, cz},
-						{cx, cy-1, cz}, {cx, cy+1, cz},
-						{cx, cy, cz-1}, {cx, cy, cz+1}
-					};
-					for (int n = 0; n < 6; n++) {
-						int nx = neighbors[n][0];
-						int ny = neighbors[n][1];
-						int nz = neighbors[n][2];
-						if (nx < 0 || nx >= gridRes) continue;
-						if (ny < 0 || ny >= gridRes) continue;
-						if (nz < 0 || nz >= gridRes) continue;
-						int nIdx = cellIdx3(nx, ny, nz);
-						if (visited[nIdx]) continue;
-						// 邻居用 expand 阈值（必须高于均匀，避免错误连接到其他 cluster）
-						if (grid[nIdx].count < expandDensity) continue;
-						visited[nIdx] = true;
-						stack.push_back(nIdx);
-					}
-				}
-
-				// 步骤 4：cluster 是否成立（只看总粒子数）
-				if (sumCount < minCount) continue;
-
-				c.totalMass     = sumMass;
-				c.particleCount = sumCount;
-				float invN = 1.0f / (float)sumCount;
-				c.centroid  = sumPos * invN;
-				c.velocity  = sumVel * invN;
-				c.avgColor  = ofFloatColor(sumR * invN, sumG * invN, sumB * invN, 1.0f);
-				clusters.push_back(c);
-			}
-		}
+		Cluster c;
+		c.particleCount = cell.count;
+		c.totalMass     = cell.mass;
+		float invN = 1.0f / (float)cell.count;
+		c.centroid = cell.posSum * invN;
+		c.velocity = cell.velSum * invN;
+		c.avgColor = ofFloatColor(cell.colR * invN, cell.colG * invN, cell.colB * invN, 1.0f);
+		clusters.push_back(c);
 	}
 
+	// 按质量降序，取 top-K（drone voice 池上限是 4）
 	std::sort(clusters.begin(), clusters.end(),
 		[](const Cluster& a, const Cluster& b){ return a.totalMass > b.totalMass; });
 	if ((int)clusters.size() > maxK) clusters.resize(maxK);
