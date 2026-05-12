@@ -39,10 +39,13 @@ public:
 	// 总池大小（HUD 显示用）
 	static constexpr int getMaxDroneVoices() { return NUM_DRONE_VOICES; }
 
-	// 给 Flock3D trail 用：归一化的"音频活跃度"
-	// = (event decay + FM ratio + drone cutoff) 三者归一化平均 [0..1]
-	// trail 长度随这个值正相关（越亮/越长 → 尾巴越长）
+	// 给 Flock3D trail 用：归一化的 cluster cutoff（0..1）
+	// 只用 cutoff（不用 FM/decay），避免与 tail→audio 形成反馈循环
 	float getAudioInfluenceForTail() const;
+
+	// 主线程：把当前 tail 长度（归一化 0..1）推给 synth
+	// 用于在 triggerCollision 中调制 FM ratio + decay
+	void setTailInfluence(float v) { a_tailInfluence.store(v); }
 
 	// 主线程：GUI 控件参数
 	void buildGui(ofParameterGroup& group);
@@ -81,6 +84,10 @@ private:
 	ofParameter<float> fmRatio;        // 0.5..8.0，自动 snap 到最近 0.5
 	ofParameter<float> fmIndex;        // 调制深度
 	ofParameter<float> fmIndexDecayMs; // modIndex 衰减时长（ms）
+
+	// ─── Tail → Audio 调制深度（tail 长度影响 FM ratio + event decay）───
+	ofParameter<float> tailToFmDepth;     // 0..1：tail 长度对 FM ratio 的影响量
+	ofParameter<float> tailToDecayDepth;  // 0..1：tail 长度对 event decay 的影响量
 
 	// ─── Cluster Drone 参数 ───
 	ofParameterGroup   clusterDroneGroup;
@@ -127,6 +134,9 @@ private:
 
 	// 仅保留 worldRadius（cluster pan 需要）
 	std::atomic<float> a_worldRadius  {250.0f};
+
+	// 来自 Flock3D：当前 tail 长度归一化（0..1），驱动 FM ratio + decay 调制
+	std::atomic<float> a_tailInfluence{0.0f};
 
 	// ─── EventVoices（粒子触发的短促音，2-op FM 合成）───
 	// 经典 Chowning FM：carrier + modulator

@@ -74,6 +74,15 @@ public:
 	// 影响 trail 长度（正相关：audio 越"亮"/越"长"，尾巴越长）
 	void setAudioInfluence(float v) { audioInfluence = v; }
 
+	// 提供 tail 长度归一化（0..1）给 Synth，作为 FM ratio / decay 的调制源
+	// 用 base tail length（GUI slider）而不是 effective，避免反馈循环
+	float getCurrentTailNormalized() const {
+		float t = (float)tailLength / (float)TRAIL_MAX;
+		if (t < 0.0f) t = 0.0f;
+		if (t > 1.0f) t = 1.0f;
+		return t;
+	}
+
 private:
 	// 每个粒子的 trail 长度上限（编译时常量）
 	// 内存：20K particles × 24 vec3 × 12 bytes ≈ 5.5 MB（可接受）

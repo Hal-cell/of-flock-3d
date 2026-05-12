@@ -55,6 +55,9 @@ void Synth::buildGui(ofParameterGroup& group){
 	fmGroup.add(fmRatio.set("FM ratio",          2.0f,  0.5f, 8.0f));    // 自动 snap 到 0.5 倍数
 	fmGroup.add(fmIndex.set("FM index",          3.0f,  0.0f, 12.0f));
 	fmGroup.add(fmIndexDecayMs.set("FM idxDecay (ms)",  40.0f, 1.0f, 500.0f));
+	// Tail length → FM ratio / event decay 调制（base + tail × depth）
+	fmGroup.add(tailToFmDepth.set("tail → FM",       0.5f, 0.0f, 1.0f));
+	fmGroup.add(tailToDecayDepth.set("tail → decay", 0.5f, 0.0f, 1.0f));
 	group.add(fmGroup);
 
 	// ─── Cluster Drone 子组（saw + SVF lowpass + chord 优先 pitch）───
@@ -100,8 +103,15 @@ void Synth::triggerCollision(const Flock3D::CollisionEvent& ev){
 	float panL = cosf(panPos * HALF_PI);
 	float panR = sinf(panPos * HALF_PI);
 
-	// P0 基础衰减：每 sample 指数衰减系数 = exp(-1 / (T_samples))
-	float decaySamples = eventDecayMs * 0.001f * sampleRate;
+	// ─── Tail → audio 调制（tail 长度归一化值 × depth）───
+	// 长尾巴 → 更长的 event decay + 更高的 FM ratio
+	float tailInf = a_tailInfluence.load();   // 0..1
+	float fmMod    = tailInf * tailToFmDepth.get()    * 4.0f;   // 最多 +4 ratio
+	float decayMod = tailInf * tailToDecayDepth.get() * 400.0f; // 最多 +400 ms
+
+	// 有效 decay = base + tail 调制
+	float effDecayMs = eventDecayMs.get() + decayMod;
+	float decaySamples = effDecayMs * 0.001f * sampleRate;
 	float baseDecay = expf(-1.0f / std::max(decaySamples, 1.0f));
 
 	// 亮度（particle 颜色亮度，0..1）
@@ -113,10 +123,11 @@ void Synth::triggerCollision(const Flock3D::CollisionEvent& ev){
 	// ─── 主线程预计算 FM 参数 ───
 	float nyquist = sampleRate * 0.45f;
 
-	// fmRatio: GUI float → snap 到最近 0.5 倍数
-	float rawRatio = fmRatio.get();
+	// fmRatio: base + tail 调制；snap 到最近 0.5 倍数
+	float rawRatio = fmRatio.get() + fmMod;
 	float snappedRatio = roundf(rawRatio * 2.0f) / 2.0f;
 	if (snappedRatio < 0.5f) snappedRatio = 0.5f;
+	if (snappedRatio > 12.0f) snappedRatio = 12.0f;   // 安全上限
 
 	// Carrier
 	float carrierFreq = std::min(freq, nyquist);
@@ -168,18 +179,13 @@ int Synth::getActiveDroneCount() const {
 }
 
 //--------------------------------------------------------------
-//  给 Flock3D trail 用：归一化的音频活跃度
-//  三个核心 synth 参数都映射到 [0..1] 然后平均：
-//    event decay (50..500 ms) — 越长事件越长
-//    FM ratio (0.5..8)         — 越高泛音越复杂
-//    cluster cutoff (80..8000) — 越高 drone 越亮
-//  全部"长 / 亮 / 复杂" → 视觉尾巴正相关变长
+//  给 Flock3D trail 用：当前 drone cutoff 归一化（0..1）
+//  - 只用 cutoff（drone 越亮 → tail 越长）
+//  - FM ratio 和 event decay 不参与，避免与 tail→audio 形成反馈循环
+//    那两个参数现在反过来被 tail 长度调制（见 triggerCollision）
 //--------------------------------------------------------------
 float Synth::getAudioInfluenceForTail() const {
-	float e = ofClamp((eventDecayMs.get()   - 50.0f)   / 450.0f,  0.0f, 1.0f);
-	float f = ofClamp((fmRatio.get()        - 0.5f)    / 7.5f,    0.0f, 1.0f);
-	float c = ofClamp((clusterCutoff.get()  - 80.0f)   / 7920.0f, 0.0f, 1.0f);
-	return (e + f + c) / 3.0f;
+	return ofClamp((clusterCutoff.get() - 80.0f) / 7920.0f, 0.0f, 1.0f);
 }
 
 //==============================================================
