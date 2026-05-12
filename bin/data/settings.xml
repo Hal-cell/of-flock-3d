@@ -1,0 +1,34 @@
+<?xml version="1.0"?>
+<Flock_3D>
+	<particles>20000</particles>
+	<world_radius>250</world_radius>
+	<alpha>0.6</alpha>
+	<autoRotate>0</autoRotate>
+	<show_axis>0</show_axis>
+	<hueBase>0.55</hueBase>
+	<hueRange>0.2</hueRange>
+	<brightness>1</brightness>
+	<noise_amp>25</noise_amp>
+	<noise_scale>0.005</noise_scale>
+	<noise_speed>0.05</noise_speed>
+	<vortex_amp>200</vortex_amp>
+	<spiral_amp>0</spiral_amp>
+	<curl_amp>139</curl_amp>
+	<attractor_amp>76</attractor_amp>
+	<repeller_amp>50</repeller_amp>
+	<flock_sep>5</flock_sep>
+	<flock_coh>15.3</flock_coh>
+	<coh_speed>0.2825</coh_speed>
+	<flock_nbrR>138.7</flock_nbrR>
+	<merge_dist>6</merge_dist>
+	<spawn_rate>40000</spawn_rate>
+	<min_alive>0.72</min_alive>
+	<damping>0.9175</damping>
+	<sizeMin>2.615</sizeMin>
+	<sizeMax>6.06</sizeMax>
+	<lifecycle_MODE>0</lifecycle_MODE>
+	<life_min_frames>180</life_min_frames>
+	<life_max_frames>309</life_max_frames>
+	<fadeIn_frames>11</fadeIn_frames>
+	<fadeOut_frames>15</fadeOut_frames>
+</Flock_3D>

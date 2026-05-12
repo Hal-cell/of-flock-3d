@@ -418,6 +418,81 @@ void Flock3D::keyPressed(int /*key*/){
 }
 
 //==============================================================
+//  Stats / Clusters — 给音频合成器消费
+//==============================================================
+Flock3D::Stats Flock3D::getStats() const {
+	Stats s;
+	int n = (int)particles.size();
+	if (n == 0) return s;
+
+	int aliveCount = 0;
+	float speedSum = 0;
+	float distSum  = 0;
+	glm::vec3 posSum(0);
+
+	for (const auto& p : particles) {
+		if (!p.alive) continue;
+		aliveCount++;
+		speedSum += glm::length(p.velocity);
+		distSum  += glm::length(p.pos);
+		posSum   += p.pos;
+	}
+
+	if (aliveCount > 0) {
+		s.aliveRatio = (float)aliveCount / n;
+		s.meanSpeed  = speedSum / aliveCount;
+		s.spread     = distSum  / aliveCount;
+		s.meanPos    = posSum   / (float)aliveCount;
+	}
+
+	s.collisionCount = (int)collisionsThisFrame.size();
+
+	// 归一化 field amp（让 6 个 amp 总和 = 1，相对权重）
+	float total = noiseAmplitude + vortexAmp + spiralAmp + curlAmp + attractorAmp + repellerAmp;
+	if (total > 0.001f) {
+		s.fieldNoise     = noiseAmplitude / total;
+		s.fieldVortex    = vortexAmp / total;
+		s.fieldSpiral    = spiralAmp / total;
+		s.fieldCurl      = curlAmp / total;
+		s.fieldAttractor = attractorAmp / total;
+		s.fieldRepeller  = repellerAmp / total;
+	}
+	return s;
+}
+
+//--------------------------------------------------------------
+std::vector<Flock3D::ClusterCandidate> Flock3D::getTopByMass(int K) const {
+	// 简单 O(N log K)：维护一个最小堆（用 vector + partial_sort）取 top-K
+	// K 一般 ≤ 8，O(N) 扫一次足够
+	std::vector<ClusterCandidate> result;
+	if (K <= 0) return result;
+	result.reserve(K);
+
+	// 用一个排好序的小数组维护当前 top-K（按 mass 升序，最小的在前）
+	for (const auto& p : particles) {
+		if (!p.alive) continue;
+		if (p.fadeOutTimer >= 0) continue;   // 排除正在死的
+
+		if ((int)result.size() < K) {
+			ClusterCandidate c{p.pos, p.velocity, p.mass, p.color};
+			// 插入并保持升序
+			auto it = std::lower_bound(result.begin(), result.end(), c,
+				[](const ClusterCandidate& a, const ClusterCandidate& b){ return a.mass < b.mass; });
+			result.insert(it, c);
+		} else if (p.mass > result.front().mass) {
+			// 比最小的还大 → 替换最小，重新排序
+			result.front() = ClusterCandidate{p.pos, p.velocity, p.mass, p.color};
+			std::sort(result.begin(), result.end(),
+				[](const ClusterCandidate& a, const ClusterCandidate& b){ return a.mass < b.mass; });
+		}
+	}
+
+	// 返回前按 mass 降序（最大的在 [0]）
+	std::reverse(result.begin(), result.end());
+	return result;
+}
+
+//==============================================================
 //  Shader
 //==============================================================
 void Flock3D::loadShaderInline(){

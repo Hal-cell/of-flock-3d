@@ -6,40 +6,68 @@ void ofApp::setup(){
 	ofSetVerticalSync(true);
 	ofBackground(0);
 
-	// Flock3D GUI
-	flock.buildGui(paramGroup);
-	gui.setup(paramGroup);
-	gui.setPosition(20, 20);
+	// ─── Flock GUI ───
+	flock.buildGui(flockParams);
+	flockGui.setup(flockParams);
+	flockGui.setPosition(20, 20);
 
-	// ─── 自动加载上次的设置（在 setup 之前 → 让 setup 用上恢复的参数）───
-	std::string fname = "settings.xml";
-	if (ofFile::doesFileExist(ofToDataPath(fname))) {
-		gui.loadFromFile(fname);
-		ofLogNotice() << "loaded " << fname;
+	// ─── Synth GUI ───（独立 panel，放在 Flock GUI 右侧）
+	synth.buildGui(synthParams);
+	synthGui.setup(synthParams);
+	synthGui.setPosition(260, 20);
+
+	// 自动加载上次的设置（必须在 flock.setup 之前，让 setup 用上恢复值）
+	if (ofFile::doesFileExist(ofToDataPath("flock_settings.xml"))) {
+		flockGui.loadFromFile("flock_settings.xml");
+		ofLogNotice() << "loaded flock_settings.xml";
+	}
+	if (ofFile::doesFileExist(ofToDataPath("synth_settings.xml"))) {
+		synthGui.loadFromFile("synth_settings.xml");
+		ofLogNotice() << "loaded synth_settings.xml";
 	}
 
 	flock.setup(ofGetWidth(), ofGetHeight());
+
+	// ─── 音频引擎 ───
+	int sampleRate  = 44100;
+	int bufferSize  = 512;
+	int numChannels = 2;
+
+	ofSoundStreamSettings ssettings;
+	ssettings.numInputChannels  = 0;
+	ssettings.numOutputChannels = numChannels;
+	ssettings.sampleRate        = sampleRate;
+	ssettings.bufferSize        = bufferSize;
+	ssettings.setOutListener(this);
+
+	synth.setup(sampleRate, bufferSize);
+	soundStream.setup(ssettings);
+
+	ofLogNotice() << "Audio: " << sampleRate << "Hz, buffer " << bufferSize
+	              << ", " << numChannels << "ch";
 
 	ofSetWindowTitle("of-flock-3d");
 }
 
 //--------------------------------------------------------------
 void ofApp::exit(){
-	// 自动保存当前 GUI 参数
-	std::string fname = "settings.xml";
-	gui.saveToFile(fname);
-	ofLogNotice() << "saved " << fname;
+	soundStream.close();
+	flockGui.saveToFile("flock_settings.xml");
+	synthGui.saveToFile("synth_settings.xml");
+	ofLogNotice() << "saved flock_settings.xml + synth_settings.xml";
 }
 
 //--------------------------------------------------------------
 void ofApp::update(){
 	flock.update();
 
-	// ─── 这里是音频集成点：本帧的碰撞事件 ───
-	// const auto& collisions = flock.getCollisionsThisFrame();
-	// for (auto& ev : collisions) {
-	//     // → 触发音频合成：ev.pos / ev.newMass / ev.color
-	// }
+	// 主线程 → synth：每帧推送 flock 当前状态
+	Flock3D::Stats stats = flock.getStats();
+	synth.updateStats(stats, flock.getWorldRadius());
+
+	// 团簇：取质量 top-8 当作 polyphonic voice 源
+	auto clusters = flock.getTopByMass(8);
+	synth.updateClusters(clusters);
 }
 
 //--------------------------------------------------------------
@@ -55,7 +83,8 @@ void ofApp::draw(){
 	}
 
 	if (showGui) {
-		gui.draw();
+		flockGui.draw();
+		synthGui.draw();
 		ofSetColor(255, 200);
 		ofDrawBitmapString("h: GUI | f: fullscreen | s: snap | r: rec | space: reset",
 		                   20, ofGetHeight() - 20);
@@ -66,6 +95,12 @@ void ofApp::draw(){
 			ofDrawBitmapString("REC " + ofToString(frameNum), ofGetWidth() - 110, 35);
 		}
 	}
+}
+
+//--------------------------------------------------------------
+void ofApp::audioOut(ofSoundBuffer& buffer){
+	// 音频线程回调（每 buffer 一次，约 11ms @ 44.1kHz/512）
+	synth.audioOut(buffer);
 }
 
 //--------------------------------------------------------------

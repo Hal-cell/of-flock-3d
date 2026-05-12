@@ -284,7 +284,7 @@
 			"files": [],
 			"inputPaths": [],
 			"isa": "PBXShellScriptBuildPhase",
-			"name": "Run Script — Compile OF",
+			"name": "Run Script \u2014 Compile OF",
 			"outputPaths": [],
 			"runOnlyForDeploymentPostprocessing": "0",
 			"shellPath": "/bin/sh",
@@ -392,7 +392,8 @@
 				"BCD13F89-6516-46D0-838E-A61DC0AA5D84",
 				"8852C82A-134E-428D-9AFC-93E9F19D1D26",
 				"19010E03-B72B-4C1F-AD2B-D2A6C0CC8709",
-				"F159B19A-3B73-477B-B73B-8DF2215DB4B9"
+				"F159B19A-3B73-477B-B73B-8DF2215DB4B9",
+				"AABBCC03-0000-0000-0000-AABBCC000003"
 			],
 			"isa": "PBXSourcesBuildPhase",
 			"runOnlyForDeploymentPostprocessing": "0"
@@ -489,7 +490,9 @@
 				"E4B69E1E0A3A1BDC003C02F2",
 				"E4B69E1F0A3A1BDC003C02F2",
 				"A2703479-1056-4883-AF00-DF319DA89EE0",
-				"89317126-FA44-42FE-ACED-F08E02B7C3BD"
+				"89317126-FA44-42FE-ACED-F08E02B7C3BD",
+				"AABBCC01-0000-0000-0000-AABBCC000001",
+				"AABBCC02-0000-0000-0000-AABBCC000002"
 			],
 			"isa": "PBXGroup",
 			"path": "src",
@@ -570,6 +573,24 @@
 			"lastKnownFileType": "sourcecode.cpp.cpp",
 			"name": "ofxToggle.cpp",
 			"sourceTree": "<group>"
+		},
+		"AABBCC01-0000-0000-0000-AABBCC000001": {
+			"fileEncoding": "4",
+			"isa": "PBXFileReference",
+			"lastKnownFileType": "sourcecode.cpp.h",
+			"name": "Synth.h",
+			"sourceTree": "<group>"
+		},
+		"AABBCC02-0000-0000-0000-AABBCC000002": {
+			"fileEncoding": "4",
+			"isa": "PBXFileReference",
+			"lastKnownFileType": "sourcecode.cpp.cpp",
+			"name": "Synth.cpp",
+			"sourceTree": "<group>"
+		},
+		"AABBCC03-0000-0000-0000-AABBCC000003": {
+			"fileRef": "AABBCC02-0000-0000-0000-AABBCC000002",
+			"isa": "PBXBuildFile"
 		}
 	},
 	"rootObject": "E4B69B4C0A3A1720003C02F2"

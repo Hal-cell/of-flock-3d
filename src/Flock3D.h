@@ -35,6 +35,30 @@ public:
 	};
 	const std::vector<CollisionEvent>& getCollisionsThisFrame() const { return collisionsThisFrame; }
 
+	// ─── 给音频合成器用的统计量 ───
+	struct Stats {
+		float aliveRatio   = 0.0f;   // alive / total
+		float meanSpeed    = 0.0f;   // 平均速度模长
+		float spread       = 0.0f;   // 平均到原点的距离（"扩散度"）
+		glm::vec3 meanPos  = glm::vec3(0);
+		int   collisionCount = 0;    // 本帧碰撞次数
+		// 6 个 field 的归一化权重（sum 接近 1，全 0 也合法）
+		float fieldNoise = 0, fieldVortex = 0, fieldSpiral = 0;
+		float fieldCurl  = 0, fieldAttractor = 0, fieldRepeller = 0;
+	};
+	Stats getStats() const;
+
+	// 团簇代表（top-K by mass，质量大的粒子 = 多次 merge 的累积）
+	struct ClusterCandidate {
+		glm::vec3    pos;
+		glm::vec3    velocity;
+		float        mass;
+		ofFloatColor color;
+	};
+	std::vector<ClusterCandidate> getTopByMass(int K) const;
+
+	float getWorldRadius() const { return worldRadius.get(); }
+
 private:
 	struct Particle {
 		glm::vec3    pos;
