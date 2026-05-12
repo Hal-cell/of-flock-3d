@@ -38,6 +38,9 @@ public:
 	// 内部会按 GUI 参数计算 freq / pan / decay / modIndex
 	void triggerCollision(const Flock3D::CollisionEvent& ev);
 
+	// 主线程调用：传递 cluster 列表 → 驱动 polyphonic drone voice
+	void updateClusterVoices(const std::vector<Flock3D::Cluster>& clusters, float worldRadius);
+
 	// 主线程：GUI 控件参数
 	void buildGui(ofParameterGroup& group);
 
@@ -76,6 +79,38 @@ private:
 	ofParameter<float> fmRatio;        // 0.5..8.0，自动 snap 到最近 0.5
 	ofParameter<float> fmIndex;        // 调制深度
 	ofParameter<float> fmIndexDecayMs; // modIndex 衰减时长（ms）
+
+	// ─── Cluster Drone 参数 ───
+	ofParameterGroup   clusterDroneGroup;
+	ofParameter<float> clusterDroneVol;     // 总音量
+	ofParameter<float> clusterAttackMs;     // fade in 时长（ms）
+	ofParameter<float> clusterReleaseMs;    // fade out 时长（ms）
+	ofParameter<float> clusterDetune;       // 3 sine 的 detune 量（0.001..0.02）
+	ofParameter<float> clusterProximity;    // 空间邻近阈值（多近算同一 cluster）
+
+	// ─── Cluster Drone Voice（polyphonic drone 池）───
+	struct DroneVoice {
+		std::atomic<bool>  active     {false};
+		std::atomic<float> targetVol  {0.0f};
+		std::atomic<float> targetFreq {110.0f};
+		std::atomic<float> targetPan  {0.5f};
+
+		// 音频线程本地（无锁）
+		float currentVol  = 0.0f;
+		float currentFreq = 110.0f;
+		float currentPan  = 0.5f;
+		float phase[3]    = {0.0f, 0.333f, 0.666f};   // 3 detuned sines
+	};
+	static constexpr int NUM_DRONE_VOICES = 8;
+	std::array<DroneVoice, NUM_DRONE_VOICES> droneVoices;
+
+	// 主线程跟踪（不跨线程 — 只主线程访问）
+	struct DroneTracking {
+		bool      active = false;
+		glm::vec3 trackedPos{0};
+		int       fadeoutFrames = 0;   // 0 = 不在 fadeout；>0 = 倒计时到完全淡出
+	};
+	std::array<DroneTracking, NUM_DRONE_VOICES> droneTracking;
 
 	// ─── DroneLayer 状态（atomic，跨线程）───
 	std::atomic<float> a_aliveRatio   {0.0f};

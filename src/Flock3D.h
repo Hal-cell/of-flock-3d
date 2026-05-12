@@ -58,6 +58,16 @@ public:
 	};
 	std::vector<ClusterCandidate> getTopByMass(int K) const;
 
+	// 空间团簇检测（用 3D grid hash，找密度高的 cell）
+	struct Cluster {
+		glm::vec3    centroid;
+		glm::vec3    velocity;
+		float        totalMass;
+		int          particleCount;
+		ofFloatColor avgColor;
+	};
+	std::vector<Cluster> getClusters(int maxK = 8) const;
+
 	float getWorldRadius() const { return worldRadius.get(); }
 
 private:
@@ -132,6 +142,11 @@ private:
 	// ─── Accent（偶尔大闪烁 + 音频高八度）───
 	ofParameter<float> accentChance;    // 0..1，每次 merge 命中的概率
 	ofParameter<float> accentSizeMul;   // accent flash 的 size 倍率
+
+	// ─── Cluster detection（用于 drone 合成）───
+	ofParameter<int>   clusterGridRes;  // 3D grid 分辨率（每边 cell 数）
+	ofParameter<float> clusterMinMass;  // cell 总质量超过此值才算 cluster
+	ofParameter<int>   clusterMinCount; // cell 内粒子数最低
 
 	// helpers
 	void      resizeParticles();

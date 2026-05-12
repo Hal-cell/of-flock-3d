@@ -54,6 +54,11 @@ void Flock3D::buildGui(ofParameterGroup& group) {
 	// ─── Accent（偶尔重音：视觉大闪烁 + 音频高八度）───
 	group.add(accentChance.set("accent chance",  0.1f, 0.0f, 1.0f));      // 10% 默认
 	group.add(accentSizeMul.set("accent size",   2.5f, 1.0f, 5.0f));      // 普通的 2.5 倍 size
+
+	// ─── Cluster detection（驱动 drone 合成）───
+	group.add(clusterGridRes.set("cluster grid",   12,   4,   32));
+	group.add(clusterMinMass.set("cluster minMass", 60.0f, 5.0f, 500.0f));
+	group.add(clusterMinCount.set("cluster minCount", 8, 3, 100));
 }
 
 //==============================================================
@@ -500,6 +505,74 @@ Flock3D::Stats Flock3D::getStats() const {
 		s.fieldRepeller  = repellerAmp / total;
 	}
 	return s;
+}
+
+//--------------------------------------------------------------
+//  Cluster detection（3D grid hash → 找高密度 cell）
+//--------------------------------------------------------------
+std::vector<Flock3D::Cluster> Flock3D::getClusters(int maxK) const {
+	int gridRes = clusterGridRes;
+	if (gridRes < 2) gridRes = 2;
+	int totalCells = gridRes * gridRes * gridRes;
+
+	struct Cell {
+		float mass = 0.0f;
+		int   count = 0;
+		glm::vec3 posSum{0};
+		glm::vec3 velSum{0};
+		float colR = 0, colG = 0, colB = 0;
+	};
+	std::vector<Cell> grid(totalCells);
+
+	float wr = worldRadius.get();
+	float invScale = (float)gridRes / (wr * 2.0f);   // pos → cell idx
+
+	for (const auto& p : particles) {
+		if (!p.alive) continue;
+		if (p.fadeOutTimer >= 0) continue;          // 排除淡出中的
+
+		int ix = (int)((p.pos.x + wr) * invScale);
+		int iy = (int)((p.pos.y + wr) * invScale);
+		int iz = (int)((p.pos.z + wr) * invScale);
+		if (ix < 0 || ix >= gridRes) continue;
+		if (iy < 0 || iy >= gridRes) continue;
+		if (iz < 0 || iz >= gridRes) continue;
+
+		int idx = ix + iy * gridRes + iz * gridRes * gridRes;
+		Cell& cell = grid[idx];
+		cell.mass  += p.mass;
+		cell.count++;
+		cell.posSum += p.pos;
+		cell.velSum += p.velocity;
+		cell.colR += p.color.r;
+		cell.colG += p.color.g;
+		cell.colB += p.color.b;
+	}
+
+	float minMass  = clusterMinMass;
+	int   minCount = clusterMinCount;
+
+	std::vector<Cluster> clusters;
+	clusters.reserve(maxK + 4);
+
+	for (const auto& cell : grid) {
+		if (cell.mass < minMass || cell.count < minCount) continue;
+
+		Cluster c;
+		c.totalMass     = cell.mass;
+		c.particleCount = cell.count;
+		float invN = 1.0f / (float)cell.count;
+		c.centroid  = cell.posSum * invN;
+		c.velocity  = cell.velSum * invN;
+		c.avgColor  = ofFloatColor(cell.colR * invN, cell.colG * invN, cell.colB * invN, 1.0f);
+		clusters.push_back(c);
+	}
+
+	// 按 mass 降序，取 top-K
+	std::sort(clusters.begin(), clusters.end(),
+		[](const Cluster& a, const Cluster& b){ return a.totalMass > b.totalMass; });
+	if ((int)clusters.size() > maxK) clusters.resize(maxK);
+	return clusters;
 }
 
 //--------------------------------------------------------------

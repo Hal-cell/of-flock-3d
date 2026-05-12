@@ -65,6 +65,12 @@ void ofApp::update(){
 	Flock3D::Stats stats = flock.getStats();
 	synth.updateStats(stats, flock.getWorldRadius());
 
+	// Cluster 检测 → cluster drone voice 池
+	// drone 个数会自然跟着 cluster 个数动态变化
+	auto clusters = flock.getClusters(8);   // 最多 8 个 voice
+	synth.updateClusterVoices(clusters, flock.getWorldRadius());
+	lastClusterCount = (int)clusters.size();
+
 	// 主线程 → synth：本帧的所有碰撞 → 触发短促音
 	for (const auto& ev : flock.getCollisionsThisFrame()) {
 		synth.triggerCollision(ev);
@@ -87,6 +93,8 @@ void ofApp::draw(){
 		flockGui.draw();
 		synthGui.draw();
 		ofSetColor(255, 200);
+		ofDrawBitmapString("clusters detected: " + ofToString(lastClusterCount) + " (= drone voices)",
+		                   20, ofGetHeight() - 40);
 		ofDrawBitmapString("h: GUI | f: fullscreen | s: snap | r: rec | space: reset",
 		                   20, ofGetHeight() - 20);
 		if (recording) {

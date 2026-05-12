@@ -45,6 +45,15 @@ void Synth::buildGui(ofParameterGroup& group){
 	fmGroup.add(fmIndex.set("FM index",          3.0f,  0.0f, 12.0f));
 	fmGroup.add(fmIndexDecayMs.set("FM idxDecay (ms)",  40.0f, 1.0f, 500.0f));
 	group.add(fmGroup);
+
+	// ─── Cluster Drone 子组 ───
+	clusterDroneGroup.setName("ClusterDrone");
+	clusterDroneGroup.add(clusterDroneVol.set("vol",          0.5f,   0.0f,   1.0f));
+	clusterDroneGroup.add(clusterAttackMs.set("attack (ms)",  800.0f, 50.0f, 4000.0f));
+	clusterDroneGroup.add(clusterReleaseMs.set("release (ms)", 1500.0f, 50.0f, 6000.0f));
+	clusterDroneGroup.add(clusterDetune.set("detune",         0.005f, 0.0f,  0.02f));
+	clusterDroneGroup.add(clusterProximity.set("proximity",   80.0f,  10.0f, 400.0f));
+	group.add(clusterDroneGroup);
 }
 
 //==============================================================
@@ -148,6 +157,91 @@ void Synth::triggerCollision(const Flock3D::CollisionEvent& ev){
 	}
 	eventRing[w] = te;
 	ringWrite.store(next, std::memory_order_release);
+}
+
+//==============================================================
+//  Cluster Drone — 主线程：根据 cluster 列表分配 / 匹配 / 释放 voice
+//  - 匹配规则：cluster 与"已激活 voice 的 trackedPos" 邻近 → 复用
+//  - 没匹配：分配空闲 voice，新计算 pitch（quantize 到 scale）
+//  - 没新 cluster 跟踪的 voice → 启动 fadeout 倒计时
+//  - fadeout 倒计时完 → 释放 voice 槽
+//==============================================================
+void Synth::updateClusterVoices(const std::vector<Flock3D::Cluster>& clusters, float wr){
+	std::array<bool, NUM_DRONE_VOICES> matched{};
+	matched.fill(false);
+
+	float proximity = clusterProximity.get();
+	float proxSq = proximity * proximity;
+
+	// ─── Pass 1: 给每个 cluster 找 voice ───
+	for (const auto& c : clusters) {
+		// (a) 找邻近已激活 voice
+		int bestIdx = -1;
+		float bestDistSq = proxSq;
+		for (int i = 0; i < NUM_DRONE_VOICES; i++) {
+			if (matched[i]) continue;
+			if (!droneTracking[i].active) continue;
+			glm::vec3 d = droneTracking[i].trackedPos - c.centroid;
+			float distSq = glm::dot(d, d);
+			if (distSq < bestDistSq) {
+				bestDistSq = distSq;
+				bestIdx = i;
+			}
+		}
+
+		// (b) 没邻近 → 分配空闲槽（活但不需是当前正激活的）
+		bool isNewVoice = false;
+		if (bestIdx < 0) {
+			for (int i = 0; i < NUM_DRONE_VOICES; i++) {
+				if (!matched[i] && !droneTracking[i].active) {
+					bestIdx = i;
+					isNewVoice = true;
+					break;
+				}
+			}
+		}
+
+		if (bestIdx < 0) continue;   // 全部 voice 被占 → 这个 cluster 暂时没声音
+
+		auto& tr = droneTracking[bestIdx];
+		auto& v  = droneVoices[bestIdx];
+
+		if (isNewVoice) {
+			// 新 voice：选音高（quantize 到 scale，基于 mass）
+			tr.active = true;
+			v.active.store(true);
+			v.targetFreq.store(massToFreq(c.totalMass));
+		}
+		// 更新跟踪位置 + 目标音量 + pan
+		tr.trackedPos = c.centroid;
+		tr.fadeoutFrames = 0;   // 重置 fadeout（如果之前在淡出）
+		v.targetVol.store(1.0f);
+		float pan = ofClamp(c.centroid.x / (wr * 2.0f) + 0.5f, 0.0f, 1.0f);
+		v.targetPan.store(pan);
+		matched[bestIdx] = true;
+	}
+
+	// ─── Pass 2: 没匹配上的活 voice → fadeout ───
+	int releaseFrames = (int)(clusterReleaseMs.get() * 0.001f * 60.0f);   // 假设 60fps
+	if (releaseFrames < 1) releaseFrames = 1;
+
+	for (int i = 0; i < NUM_DRONE_VOICES; i++) {
+		if (matched[i]) continue;
+		if (!droneTracking[i].active) continue;
+
+		if (droneTracking[i].fadeoutFrames == 0) {
+			// 启动 fadeout
+			droneVoices[i].targetVol.store(0.0f);
+			droneTracking[i].fadeoutFrames = releaseFrames;
+		} else {
+			droneTracking[i].fadeoutFrames--;
+			if (droneTracking[i].fadeoutFrames <= 0) {
+				// 完全淡出 → 释放
+				droneTracking[i].active = false;
+				droneVoices[i].active.store(false);
+			}
+		}
+	}
 }
 
 //==============================================================
@@ -264,6 +358,60 @@ void Synth::audioOut(ofSoundBuffer& buffer){
 		// drone 居中 pan
 		left  += droneOut * 0.5f;
 		right += droneOut * 0.5f;
+
+		// ───────────────────────────────
+		// A.5  Cluster Drone — 多声部 drone（每个 cluster 一个 voice）
+		//      平滑 currentVol → targetVol（attack/release）
+		//      每 voice = 3 detuned sine 叠加
+		// ───────────────────────────────
+		{
+			float cdrVol = clusterDroneVol;
+			float attackTau = ofClamp(clusterAttackMs.get(),  10.0f, 10000.0f) * 0.001f * sampleRate;
+			float releaseTau = ofClamp(clusterReleaseMs.get(), 10.0f, 10000.0f) * 0.001f * sampleRate;
+			float attackCoef  = 1.0f - expf(-1.0f / attackTau);
+			float releaseCoef = 1.0f - expf(-1.0f / releaseTau);
+			float detune = clusterDetune;
+			float detuneRatios[3] = {1.0f, 1.0f + detune, 1.0f - detune};
+
+			float cdrSumL = 0, cdrSumR = 0;
+			for (int v = 0; v < NUM_DRONE_VOICES; v++) {
+				auto& dv = droneVoices[v];
+				if (!dv.active.load()) continue;
+
+				float tVol  = dv.targetVol.load();
+				float tFreq = dv.targetFreq.load();
+				float tPan  = dv.targetPan.load();
+
+				// 平滑（attack vs release 分开系数）
+				float coef = (tVol > dv.currentVol) ? attackCoef : releaseCoef;
+				dv.currentVol  += (tVol - dv.currentVol)  * coef;
+				dv.currentFreq += (tFreq - dv.currentFreq) * 0.0005f;
+				dv.currentPan  += (tPan - dv.currentPan)  * 0.001f;
+
+				if (dv.currentVol < 0.00001f && tVol < 0.0001f) continue;
+
+				// 3 detuned sine 叠加
+				float sample = 0;
+				for (int s = 0; s < 3; s++) {
+					float f = dv.currentFreq * detuneRatios[s];
+					if (f > sampleRate * 0.45f) f = sampleRate * 0.45f;
+					sample += sinf(dv.phase[s] * TWO_PI);
+					dv.phase[s] += f / sampleRate;
+					if (dv.phase[s] >= 1.0f) dv.phase[s] -= 1.0f;
+				}
+				sample *= dv.currentVol * (1.0f / 3.0f);   // 3 sines 归一化
+
+				// 等功率 pan
+				float panL = cosf(dv.currentPan * HALF_PI);
+				float panR = sinf(dv.currentPan * HALF_PI);
+				cdrSumL += sample * panL;
+				cdrSumR += sample * panR;
+			}
+			cdrSumL *= cdrVol * (2.0f / NUM_DRONE_VOICES);
+			cdrSumR *= cdrVol * (2.0f / NUM_DRONE_VOICES);
+			left  += cdrSumL;
+			right += cdrSumR;
+		}
 
 		// ───────────────────────────────
 		// B. EventVoices — 短促粒子触发声（2-op FM 合成）

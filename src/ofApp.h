@@ -32,4 +32,5 @@ private:
 	bool showGui   = true;
 	bool recording = false;
 	int  frameNum  = 0;
+	int  lastClusterCount = 0;   // HUD 显示
 };
