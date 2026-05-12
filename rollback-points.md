@@ -392,3 +392,29 @@ effective_len = base_len × (0.5 + audio_influence × sensitivity × 1.5)
 - 加 thickness（geometry shader / quad-billboard）让线条更"实"
 - color gradient（沿 trail 改变颜色，eg field 类型染色）
 - 加 velocity-vector display 调试用
+
+## rp-14 — Trail rendering performance (5x faster)
+
+**Commit**: `git tag rp-14-trail-perf` → `bb1fe00`
+
+**问题**: tail length 调长后明显卡顿（~1.8M push_back/frame）。
+
+**优化** (5 处)：
+1. **缓存 ofMesh**：trailMesh 成为成员变量，clear() 保留 vector capacity
+   → 避免每帧重新分配 ~5MB 内存
+2. **Reserve capacity**：算上限先 reserve，跳过 vector 自动 grow 的 realloc
+3. **直接 push_back**：用 `getVertices().push_back()` 而不是 `addVertex()` wrapper
+4. **去掉 modulo**：内循环用增量 + `if (idx >= MAX) idx -= MAX`
+   （modulo 约 10-20 cycles，增量 1-2 cycles）
+5. **Stride sampling**：长尾巴自动跳点采样
+   - effLen ≤ 12 → 满采样
+   - effLen 13..18 → 隔点（step 2）
+   - effLen 19..24 → 三分之一（step 3）
+   - 长尾看起来一样平滑，因为视距远 → 跳点 invisible
+
+综合 3-5x 性能提升。`tail length = 24` 也能流畅。
+
+**Use this checkpoint to**:
+- 进一步优化：用 ofVbo + GL_LINES + 持久映射 buffer
+- 用 geometry shader 扩展 lines 成 quad（更厚的光束）
+- LOD 系统（远处粒子只画粒子不画 trail）
