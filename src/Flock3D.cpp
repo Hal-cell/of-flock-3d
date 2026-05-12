@@ -55,11 +55,10 @@ void Flock3D::buildGui(ofParameterGroup& group) {
 	group.add(accentChance.set("accent chance",  0.1f, 0.0f, 1.0f));      // 10% 默认
 	group.add(accentSizeMul.set("accent size",   2.5f, 1.0f, 5.0f));      // 普通的 2.5 倍 size
 
-	// ─── Cluster detection（BFS 连通区域 + 总量阈值）───
-	group.add(clusterGridRes.set("cluster grid",       12,   4,   32));
-	group.add(clusterCellDensity.set("cluster cellDensity", 6, 2, 100));
-	group.add(clusterMinCount.set("cluster minCount", 30,  5,  500));
-	group.add(clusterMinMass.set("cluster minMass",   60.0f, 5.0f, 1000.0f));
+	// ─── Cluster detection（单一 sensitivity 滑块）───
+	// 0 = 严格（只检测大密集团）→ 1 = 宽松（小聚集就算）
+	// 内部自动按 alive 粒子数派生 cell 密度阈值（避免误检）
+	group.add(clusterSensitivity.set("cluster sensitivity", 0.4f, 0.0f, 1.0f));
 
 	// ─── Trail（光束尾巴）───
 	// length = baseLen × (0.5 + audio_influence × sensitivity × 1.5)
@@ -625,14 +624,13 @@ Flock3D::Stats Flock3D::getStats() const {
 
 //--------------------------------------------------------------
 //  Cluster detection（grid hash + BFS 连通区域合并）
-//  - 步骤 1：把粒子塞进 3D grid
-//  - 步骤 2：找种子 cell（density ≥ cellDensity）
-//  - 步骤 3：BFS 把相邻密集 cell 合并成一个 cluster
-//  - 步骤 4：用 minCount / minMass 过滤掉太小的 cluster
+//  - 步骤 1：把粒子塞进 3D grid + 统计 alive 数
+//  - 步骤 2：从 sensitivity 派生：cellDensity（相对均匀分布的倍率）+ minCount
+//  - 步骤 3：找密度过阈的 cell，BFS 合并相邻
+//  - 步骤 4：cluster 总粒子数 ≥ minCount 才成立
 //--------------------------------------------------------------
 std::vector<Flock3D::Cluster> Flock3D::getClusters(int maxK) const {
-	int gridRes = clusterGridRes;
-	if (gridRes < 2) gridRes = 2;
+	const int gridRes = 14;       // 内部 hardcode（用户不需要关心）
 	int totalCells = gridRes * gridRes * gridRes;
 
 	struct Cell {
@@ -647,10 +645,12 @@ std::vector<Flock3D::Cluster> Flock3D::getClusters(int maxK) const {
 	float wr = worldRadius.get();
 	float invScale = (float)gridRes / (wr * 2.0f);
 
-	// 步骤 1：粒子分桶
+	// 步骤 1：粒子分桶 + 统计 alive 数（用于动态阈值）
+	int aliveCount = 0;
 	for (const auto& p : particles) {
 		if (!p.alive) continue;
 		if (p.fadeOutTimer >= 0) continue;
+		aliveCount++;
 
 		int ix = (int)((p.pos.x + wr) * invScale);
 		int iy = (int)((p.pos.y + wr) * invScale);
@@ -670,9 +670,16 @@ std::vector<Flock3D::Cluster> Flock3D::getClusters(int maxK) const {
 		cell.colB += p.color.b;
 	}
 
-	int cellDensity = std::max(2, (int)clusterCellDensity);
-	int minCount    = (int)clusterMinCount;
-	float minMass   = clusterMinMass;
+	// 步骤 2：从 sensitivity 派生阈值
+	// sens 0 = 严格：cell 要比均匀密 8 倍，cluster ≥ 80 粒
+	// sens 1 = 宽松：cell 要比均匀密 2 倍，cluster ≥ 20 粒
+	float sens     = ofClamp(clusterSensitivity.get(), 0.0f, 1.0f);
+	float cellRatio = 8.0f - sens * 6.0f;           // 8 → 2
+	int   minCount  = (int)(80.0f - sens * 60.0f);  // 80 → 20
+
+	// 自适应：阈值 = 均匀分布平均 × cellRatio（不受粒子总数影响）
+	float avgDensity = (totalCells > 0) ? (float)aliveCount / (float)totalCells : 0.0f;
+	int   cellDensity = std::max(2, (int)(avgDensity * cellRatio));
 
 	// 步骤 2-3：BFS 合并相邻密集 cell
 	std::vector<bool> visited(totalCells, false);
@@ -741,8 +748,8 @@ std::vector<Flock3D::Cluster> Flock3D::getClusters(int maxK) const {
 					}
 				}
 
-				// 步骤 4：cluster 是否成立
-				if (sumCount < minCount || sumMass < minMass) continue;
+				// 步骤 4：cluster 是否成立（只看总粒子数）
+				if (sumCount < minCount) continue;
 
 				c.totalMass     = sumMass;
 				c.particleCount = sumCount;

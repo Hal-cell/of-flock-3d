@@ -182,11 +182,10 @@ private:
 	ofParameter<float> accentChance;    // 0..1，每次 merge 命中的概率
 	ofParameter<float> accentSizeMul;   // accent flash 的 size 倍率
 
-	// ─── Cluster detection（BFS 连通区域 + 总量阈值）───
-	ofParameter<int>   clusterGridRes;     // 3D grid 分辨率
-	ofParameter<int>   clusterCellDensity; // 单个 cell 算"密集"的最小粒子数（种子 + 扩展）
-	ofParameter<int>   clusterMinCount;    // 整个 cluster 总粒子数下限
-	ofParameter<float> clusterMinMass;     // 整个 cluster 总质量下限
+	// ─── Cluster detection（一个滑块控制全部）───
+	// sensitivity 0 = 严格（只检测明显大密集），1 = 宽松（小聚集就算）
+	// 内部自动派生 cell 密度阈值 + cluster 总粒子数阈值，并按粒子总数自适应
+	ofParameter<float> clusterSensitivity;
 
 	// ─── Trail（光束尾巴）───
 	// 长度 = baseTailLen × (0.5 + audioInfluence × tailAudioSensitivity × 1.5)
