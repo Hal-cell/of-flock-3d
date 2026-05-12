@@ -61,13 +61,14 @@ void ofApp::exit(){
 void ofApp::update(){
 	flock.update();
 
-	// 主线程 → synth：每帧推送 flock 当前状态
+	// 主线程 → synth：每帧推送 flock 当前状态（用于 drone 调制）
 	Flock3D::Stats stats = flock.getStats();
 	synth.updateStats(stats, flock.getWorldRadius());
 
-	// 团簇：取质量 top-8 当作 polyphonic voice 源
-	auto clusters = flock.getTopByMass(8);
-	synth.updateClusters(clusters);
+	// 主线程 → synth：本帧的所有碰撞 → 触发短促音
+	for (const auto& ev : flock.getCollisionsThisFrame()) {
+		synth.triggerCollision(ev);
+	}
 }
 
 //--------------------------------------------------------------

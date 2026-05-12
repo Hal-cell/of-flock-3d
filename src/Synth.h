@@ -8,7 +8,7 @@
 /**
  * Synth — 基于 Flock3D 状态实时合成音频
  * ──────────────────────────────────────────────
- * 3 层架构（架构 A + B + D 的混合）：
+ * 3 层架构：
  *
  *   A. DroneLayer  — 持续 drone，由 flock 整体状态调制
  *      4 detuned sine（fundamental + 5th + octave + super 2nd）
@@ -16,18 +16,14 @@
  *      filter cutoff ← spread + aliveRatio
  *      volume ← aliveRatio
  *
- *   B. VoicePool   — 8 个 polyphonic voice
- *      每个 voice 对应一个团簇代表
- *      pitch 量化到五声音阶；mass 大 → 音低
- *      sine + saw 混音由 color hue 控制
- *      envelope：smooth attack/release 跟随团簇出现/消失
+ *   B. EventVoices — 32 个短促触发声部（粒子合成器）
+ *      每次碰撞抢占一个空闲 voice 触发 damped sine + FM brightness
+ *      pitch 量化到 scale；衰减时间可调（默认 ~50ms）
+ *      lock-free ring buffer 从主线程接收触发事件
  *
  *   D. ModalReverb — feedback delay network
- *      4 条 delay line 反馈频率落在调音 root 倍数 → 自然共鸣
+ *      4 条 delay line → 给 EventVoices 拖尾空间感
  *      tanh limiter 防爆音
- *
- * 主线程（60Hz）→ Synth.update*() 设参数（用 std::atomic 同步）
- * 音频线程（48kHz/512 block）→ Synth.audioOut() 生成样本
  */
 class Synth {
 
@@ -35,9 +31,12 @@ public:
 	void setup(int sampleRate, int bufferSize);
 	void audioOut(ofSoundBuffer& buffer);
 
-	// 主线程调用：传递 flock 状态
+	// 主线程调用：传递 flock 状态（drone 用）
 	void updateStats(const Flock3D::Stats& s, float worldRadius);
-	void updateClusters(const std::vector<Flock3D::ClusterCandidate>& clusters);
+
+	// 主线程调用：碰撞触发 — 直接把碰撞事件推入 ring buffer
+	// 内部会按 GUI 参数计算 freq / pan / decay / modIndex
+	void triggerCollision(const Flock3D::CollisionEvent& ev);
 
 	// 主线程：GUI 控件参数
 	void buildGui(ofParameterGroup& group);
@@ -58,10 +57,14 @@ private:
 	// ─── GUI 参数（主线程写，音频读取）───
 	ofParameter<float> masterVol;
 	ofParameter<float> droneVol;
-	ofParameter<float> voiceVol;
+	ofParameter<float> eventVol;       // 粒子触发器总音量
+	ofParameter<float> eventDecayMs;   // 事件衰减时长（毫秒）
+	ofParameter<float> eventGainPerHit;// 每次 hit 的振幅（避免太密太响）
 	ofParameter<float> reverbAmt;
 	ofParameter<float> rootFreq;       // 基频（Hz），默认 110 (A2)
 	ofParameter<int>   scaleType;      // 0..SCALE_COUNT-1
+	ofParameter<bool>  eventQuantize;  // 是否量化 pitch 到 scale
+	ofParameter<float> minMassToFire;  // 低于此质量的碰撞被忽略（防 spam）
 	ofParameter<bool>  audioEnabled;   // 总开关
 
 	// ─── DroneLayer 状态（atomic，跨线程）───
@@ -86,27 +89,33 @@ private:
 	float smMeanSpeed     = 0.0f;
 	float smSpread        = 0.0f;
 
-	// ─── VoicePool ───
-	static constexpr int NUM_VOICES = 8;
-	struct Voice {
-		std::atomic<bool>  active     {false};   // 主线程标记激活
-		std::atomic<float> targetFreq {220.0f};  // 主线程写，音频线程读
-		std::atomic<float> targetPan  {0.5f};
-		std::atomic<float> targetCut  {1500.0f};
-		std::atomic<float> targetVol  {0.0f};
-		std::atomic<float> targetMix  {0.5f};    // sine/saw 比例
-
-		// 音频线程本地（无锁）
-		float currentFreq = 220.0f;
-		float currentPan  = 0.5f;
-		float currentCut  = 1500.0f;
-		float currentVol  = 0.0f;
-		float currentMix  = 0.5f;
-		float phaseSine   = 0.0f;
-		float phaseSaw    = 0.0f;
-		float lpState     = 0.0f;
+	// ─── EventVoices（粒子触发的短促音）───
+	// 音频线程本地状态，无需 atomic（生命周期完全在音频线程内）
+	struct EventVoice {
+		bool  active = false;
+		float freq;       // Hz
+		float pan;        // 0..1
+		float amp;        // 当前振幅（每 sample 衰减）
+		float decay;      // 每 sample 衰减系数（接近 1 = 慢）
+		float phase;      // 0..1
+		float modIndex;   // FM 调制深度（0=纯 sine，>0 = bell-ish）
 	};
-	std::array<Voice, NUM_VOICES> voices;
+	static constexpr int NUM_EVENT_VOICES = 32;
+	std::array<EventVoice, NUM_EVENT_VOICES> eventVoices;
+
+	// ─── Ring buffer 把碰撞事件从主线程传到音频线程（lock-free SPSC）───
+	struct TriggerEvent {
+		float freq;
+		float pan;
+		float amp;
+		float decay;
+		float modIndex;
+	};
+	static constexpr int RING_SIZE = 256;   // 必须 2 的幂
+	static_assert((RING_SIZE & (RING_SIZE - 1)) == 0, "RING_SIZE must be power of 2");
+	std::array<TriggerEvent, RING_SIZE> eventRing;
+	std::atomic<int> ringWrite{0};
+	std::atomic<int> ringRead{0};
 
 	// ─── ModalReverb（4-tap feedback delay）───
 	std::vector<float> delayBuf[4];

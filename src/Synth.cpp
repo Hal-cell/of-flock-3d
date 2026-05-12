@@ -19,13 +19,17 @@ void Synth::setup(int sr, int bs){
 
 void Synth::buildGui(ofParameterGroup& group){
 	group.setName("Synth");
-	group.add(audioEnabled.set("audio ON",      true));
-	group.add(masterVol.set("masterVol",        0.5f, 0.0f, 1.0f));
-	group.add(droneVol.set("droneVol",          0.4f, 0.0f, 1.0f));
-	group.add(voiceVol.set("voiceVol",          0.6f, 0.0f, 1.0f));
-	group.add(reverbAmt.set("reverbAmt",        0.35f, 0.0f, 1.0f));
-	group.add(rootFreq.set("rootFreq (Hz)",     110.0f, 55.0f, 440.0f));   // A2 默认
-	group.add(scaleType.set("scale",            0, 0, int(SCALE_COUNT) - 1));
+	group.add(audioEnabled.set("audio ON",       true));
+	group.add(masterVol.set("masterVol",         0.5f, 0.0f, 1.0f));
+	group.add(droneVol.set("droneVol",           0.4f, 0.0f, 1.0f));
+	group.add(eventVol.set("eventVol",           0.6f, 0.0f, 1.0f));
+	group.add(eventDecayMs.set("decay (ms)",    50.0f, 5.0f, 500.0f));
+	group.add(eventGainPerHit.set("hit gain",    0.5f, 0.05f, 1.5f));
+	group.add(minMassToFire.set("minMass",       0.0f, 0.0f, 50.0f));
+	group.add(eventQuantize.set("quantize",      true));
+	group.add(reverbAmt.set("reverbAmt",         0.45f, 0.0f, 1.0f));
+	group.add(rootFreq.set("rootFreq (Hz)",      110.0f, 55.0f, 440.0f));
+	group.add(scaleType.set("scale",             0, 0, int(SCALE_COUNT) - 1));
 }
 
 //==============================================================
@@ -44,41 +48,51 @@ void Synth::updateStats(const Flock3D::Stats& s, float worldRadius){
 	a_worldRadius.store(worldRadius);
 }
 
-void Synth::updateClusters(const std::vector<Flock3D::ClusterCandidate>& clusters){
+//--------------------------------------------------------------
+//  主线程：每次碰撞推一个 TriggerEvent 到 ring buffer
+//--------------------------------------------------------------
+void Synth::triggerCollision(const Flock3D::CollisionEvent& ev){
+	// 质量门槛：太小不触发
+	if (ev.newMass < minMassToFire) return;
+
 	float wr = a_worldRadius.load();
 
-	int n = (int)clusters.size();
-	for (int i = 0; i < NUM_VOICES; i++) {
-		auto& v = voices[i];
-		if (i < n) {
-			const auto& c = clusters[i];
-			v.active.store(true);
-			v.targetFreq.store(massToFreq(c.mass));
-
-			// pan：x ∈ [-wr, wr] → [0, 1]
-			float pan = ofClamp(c.pos.x / (wr * 2.0f) + 0.5f, 0.0f, 1.0f);
-			v.targetPan.store(pan);
-
-			// filter cutoff：y 越高音越亮（200..6000 Hz）
-			float yNorm = ofClamp(c.pos.y / wr * 0.5f + 0.5f, 0.0f, 1.0f);
-			v.targetCut.store(200.0f + yNorm * 5800.0f);
-
-			// 音量 ∝ sqrt(mass)，再线性归一化
-			float vol = ofClamp(sqrtf(c.mass) / 10.0f, 0.0f, 1.0f);
-			v.targetVol.store(vol);
-
-			// sine ↔ saw 混音：color hue → 混合比
-			// HSV hue approximated from RGB max channel
-			float maxc = std::max({c.color.r, c.color.g, c.color.b});
-			float minc = std::min({c.color.r, c.color.g, c.color.b});
-			float chroma = maxc - minc;
-			v.targetMix.store(ofClamp(chroma, 0.0f, 1.0f));
-		} else {
-			// 没足够团簇 → 静音 + 标记非激活（让 envelope 释放）
-			v.active.store(false);
-			v.targetVol.store(0.0f);
-		}
+	// 频率：从 mass 算（可选量化到 scale）
+	float freq;
+	if (eventQuantize) {
+		freq = massToFreq(ev.newMass);   // 带量化
+	} else {
+		// 不量化：纯 mass → freq 的对数映射
+		float l = log10f(std::max(ev.newMass, 1.0f));
+		float t = ofClamp((l - 0.5f) / 2.0f, 0.0f, 1.0f);
+		t = 1.0f - t;   // mass 大 → 低
+		freq = rootFreq * powf(2.0f, t * 3.0f);
 	}
+
+	// pan
+	float pan = ofClamp(ev.pos.x / (wr * 2.0f) + 0.5f, 0.0f, 1.0f);
+
+	// 衰减：把 ms 转成每 sample 的乘数 exp(-1 / (decaySamples))
+	// amp(t) = amp_0 * exp(-t/T) → 每 sample = exp(-1/(T*sr))
+	float decaySamples = eventDecayMs * 0.001f * sampleRate;
+	float decay = expf(-1.0f / std::max(decaySamples, 1.0f));
+
+	// FM modIndex：color 亮度 → metallic 程度
+	float brightness = (ev.color.r + ev.color.g + ev.color.b) / 3.0f;
+	float modIndex = brightness * 2.5f;   // 0..2.5 范围
+
+	// 振幅：每 hit 固定，避免少数大碰撞淹没小碰撞
+	float amp = eventGainPerHit;
+
+	// 写入 ring buffer（lock-free SPSC）
+	int w = ringWrite.load(std::memory_order_relaxed);
+	int next = (w + 1) & (RING_SIZE - 1);
+	if (next == ringRead.load(std::memory_order_acquire)) {
+		// ring 满了 → 丢弃（极少见，RING_SIZE=256 足够 ~5 帧的事件）
+		return;
+	}
+	eventRing[w] = {freq, pan, amp, decay, modIndex};
+	ringWrite.store(next, std::memory_order_release);
 }
 
 //==============================================================
@@ -127,6 +141,36 @@ void Synth::audioOut(ofSoundBuffer& buffer){
 
 	float master = masterVol;
 	float verbAmt = reverbAmt;
+	float evtVol = eventVol;
+
+	// ─── 先把 ring buffer 里的 trigger event 分配给空闲 event voices ───
+	int r = ringRead.load(std::memory_order_relaxed);
+	int wEnd = ringWrite.load(std::memory_order_acquire);
+	while (r != wEnd) {
+		const TriggerEvent& te = eventRing[r];
+		// 找一个空闲 voice，或抢占振幅最小的（voice stealing）
+		int targetIdx = -1;
+		float minAmp = 1e9;
+		for (int i = 0; i < NUM_EVENT_VOICES; i++) {
+			if (!eventVoices[i].active) { targetIdx = i; break; }
+			if (eventVoices[i].amp < minAmp) {
+				minAmp = eventVoices[i].amp;
+				targetIdx = i;
+			}
+		}
+		if (targetIdx >= 0) {
+			auto& v = eventVoices[targetIdx];
+			v.active   = true;
+			v.freq     = te.freq;
+			v.pan      = te.pan;
+			v.amp      = te.amp;
+			v.decay    = te.decay;
+			v.phase    = 0.0f;     // 重新起始，避免 click
+			v.modIndex = te.modIndex;
+		}
+		r = (r + 1) & (RING_SIZE - 1);
+	}
+	ringRead.store(r, std::memory_order_release);
 
 	for (int i = 0; i < n; i++) {
 		float left = 0, right = 0;
@@ -158,54 +202,43 @@ void Synth::audioOut(ofSoundBuffer& buffer){
 		right += droneOut * 0.5f;
 
 		// ───────────────────────────────
-		// B. VoicePool
+		// B. EventVoices — 短促粒子触发声
+		//   damped sine + 可选 FM brightness
 		// ───────────────────────────────
-		float voiceSumL = 0, voiceSumR = 0;
-		for (int v = 0; v < NUM_VOICES; v++) {
-			auto& vc = voices[v];
+		float eventSumL = 0, eventSumR = 0;
+		for (int v = 0; v < NUM_EVENT_VOICES; v++) {
+			auto& vc = eventVoices[v];
+			if (!vc.active) continue;
 
-			// 加载目标 + 平滑
-			const float fastA = 0.002f;
-			float tf = vc.targetFreq.load();
-			float tp = vc.targetPan.load();
-			float tc = vc.targetCut.load();
-			float tv = vc.targetVol.load();
-			float tm = vc.targetMix.load();
+			// 相位推进
+			float dt = vc.freq / sampleRate;
+			vc.phase += dt;
+			if (vc.phase >= 1.0f) vc.phase -= 1.0f;
 
-			vc.currentFreq += (tf - vc.currentFreq) * fastA;
-			vc.currentPan  += (tp - vc.currentPan)  * fastA;
-			vc.currentCut  += (tc - vc.currentCut)  * fastA;
-			vc.currentVol  += (tv - vc.currentVol)  * 0.0003f;   // 慢点 attack/release
-			vc.currentMix  += (tm - vc.currentMix)  * fastA;
+			// FM 调制：用一个 1.4 倍频载波调制相位（产生 bell-like 谐波）
+			float modPhase = vc.phase * 1.4f;   // not exact 整数倍 → 不和谐 = 金属感
+			float modulator = sinf(modPhase * TWO_PI) * vc.modIndex;
+			float sample = sinf((vc.phase * TWO_PI) + modulator);
 
-			if (vc.currentVol < 0.0001f) continue;   // 太小不算
-
-			// 振荡器
-			float dt = vc.currentFreq / sampleRate;
-			vc.phaseSine += dt;
-			if (vc.phaseSine >= 1.0f) vc.phaseSine -= 1.0f;
-			vc.phaseSaw  += dt;
-			if (vc.phaseSaw >= 1.0f) vc.phaseSaw -= 1.0f;
-
-			float sine = sinf(vc.phaseSine * TWO_PI);
-			float sw   = saw(vc.phaseSaw, dt);
-			float sample = sine * (1.0f - vc.currentMix) + sw * vc.currentMix;
-
-			// 单极低通（每 voice 一个）
-			float voiceLpCoef = ofClamp(vc.currentCut / (sampleRate * 0.5f), 0.0001f, 0.5f);
-			vc.lpState += (sample - vc.lpState) * voiceLpCoef;
-			sample = vc.lpState * vc.currentVol;
+			// 振幅 + 衰减
+			sample *= vc.amp;
+			vc.amp *= vc.decay;
+			if (vc.amp < 0.00001f) {
+				vc.active = false;
+				continue;
+			}
 
 			// 等功率 pan
-			float panL = cosf(vc.currentPan * HALF_PI);
-			float panR = sinf(vc.currentPan * HALF_PI);
-			voiceSumL += sample * panL;
-			voiceSumR += sample * panR;
+			float panL = cosf(vc.pan * HALF_PI);
+			float panR = sinf(vc.pan * HALF_PI);
+			eventSumL += sample * panL;
+			eventSumR += sample * panR;
 		}
-		voiceSumL *= voiceVol * (1.0f / NUM_VOICES) * 2.0f;
-		voiceSumR *= voiceVol * (1.0f / NUM_VOICES) * 2.0f;
-		left  += voiceSumL;
-		right += voiceSumR;
+		// 归一化：除以 voice 数量，但 voice 平均不会全部 active，所以乘 2 提升音量
+		eventSumL *= evtVol * (2.0f / NUM_EVENT_VOICES);
+		eventSumR *= evtVol * (2.0f / NUM_EVENT_VOICES);
+		left  += eventSumL;
+		right += eventSumR;
 
 		// ───────────────────────────────
 		// D. ModalReverb (4-tap FDN)
