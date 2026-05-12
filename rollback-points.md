@@ -448,3 +448,33 @@ effDecayMs = baseDecayMs + tailInfluence × tailToDecayDepth × 400ms
 **Use this checkpoint to**:
 - 加更多 visual → audio 映射（速度 → 颤音、密度 → 滤波、color → 音色）
 - 把 tail → audio 也设成可正可负（双向调制）
+
+## rp-16 — Fix cluster over-detection (relative density threshold)
+
+**Commit**: `git tag rp-16-cluster-density-ratio` → `2b94f4f`
+
+**Bug**: 没有真正聚集时也总检测到一个 cluster。
+
+**根因**: 旧版 `cellDensity = 6` 是绝对阈值；20K 粒子 / 12³ cell 平均每 cell 11.6 个
+→ 几乎所有 cell 都过阈值 → BFS 合并所有 cell 成一个大 cluster。
+
+**修复**: 改成相对阈值
+```
+effectiveCellDensity = max(2, avgDensity × densityRatio)
+其中 avgDensity = alive_count / total_cells
+```
+
+**新 GUI**:
+| 参数 | 范围 | 默认 |
+|---|---|---|
+| `cluster density ratio` | 1.5..10 | 3.0 (cell 必须比均匀 3 倍密才算"聚集") |
+| `cluster minCount` | 10..1000 | 80 (整团总粒子数下限) |
+| `cluster minMass` | 10..5000 | 200 (整团总质量下限) |
+
+**统计学保证**: ratio=3.0 时，Poisson 随机分布产生 cell ≥ 35 的概率 ≈ 1e-9
+→ 实际上不可能被随机波动触发，**只有真正的 flock 聚集**才被检测到
+
+**Use this checkpoint to**:
+- 加 cluster 跟踪稳定性（Hungarian algorithm 匹配前后帧）
+- 加 cluster 持续时间过滤（瞬时 cluster 不算数）
+- DBSCAN 替换 BFS（更稳健的密度聚类）
