@@ -4,7 +4,7 @@
 	<masterVol>0.67</masterVol>
 	<droneVol>0</droneVol>
 	<voiceVol>0.7</voiceVol>
-	<reverbAmt>1</reverbAmt>
+	<reverbAmt>0.815</reverbAmt>
 	<rootFreq__Hz_>91.575</rootFreq__Hz_>
 	<scale>1</scale>
 	<eventVol>0.304395</eventVol>
@@ -33,7 +33,7 @@
 		<FM_idxDecay__ms_>18.5131</FM_idxDecay__ms_>
 	</FM>
 	<ClusterDrone>
-		<vol>0.5</vol>
+		<vol>0.494898</vol>
 		<attack__ms_>3052.81</attack__ms_>
 		<release__ms_>4876.79</release__ms_>
 		<detune>0.00459184</detune>
@@ -41,4 +41,7 @@
 		<cutoff__Hz_>847.755</cutoff__Hz_>
 		<resonance>0.470153</resonance>
 	</ClusterDrone>
+	<reverbSize>0.8245</reverbSize>
+	<reverbDamp>0.43065</reverbDamp>
+	<reverb_preDelay__ms_>38</reverb_preDelay__ms_>
 </Synth>

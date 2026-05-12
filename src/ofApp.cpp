@@ -61,8 +61,11 @@ void ofApp::exit(){
 void ofApp::update(){
 	flock.update();
 
+	// Audio → Visual：把音频活跃度推给 flock 用于 trail 长度调节
+	// 三个 synth 参数（event decay / FM ratio / drone cutoff）归一化平均
+	flock.setAudioInfluence(synth.getAudioInfluenceForTail());
+
 	// Cluster 检测 → cluster drone voice 池（最多 4 个 drone）
-	// 多于 4 cluster 时只取 top-4 by mass（getClusters 内部 sort）
 	auto clusters = flock.getClusters(Synth::getMaxDroneVoices());
 	synth.updateClusterVoices(clusters, flock.getWorldRadius());
 	lastClusterCount = (int)clusters.size();

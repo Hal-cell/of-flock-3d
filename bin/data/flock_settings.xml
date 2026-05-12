@@ -14,16 +14,16 @@
 	<vortex_amp>116</vortex_amp>
 	<spiral_amp>0</spiral_amp>
 	<curl_amp>130</curl_amp>
-	<attractor_amp>50</attractor_amp>
-	<repeller_amp>27</repeller_amp>
-	<flock_sep>1.55</flock_sep>
+	<attractor_amp>74</attractor_amp>
+	<repeller_amp>52</repeller_amp>
+	<flock_sep>0.6</flock_sep>
 	<flock_coh>19.6</flock_coh>
 	<coh_speed>0.345</coh_speed>
-	<flock_nbrR>82.15</flock_nbrR>
+	<flock_nbrR>339.55</flock_nbrR>
 	<merge_dist>6</merge_dist>
 	<spawn_rate>40000</spawn_rate>
-	<min_alive>0.9</min_alive>
-	<damping>0.91</damping>
+	<min_alive>0.89</min_alive>
+	<damping>0.95</damping>
 	<sizeMin>2.14</sizeMin>
 	<sizeMax>6.06</sizeMax>
 	<lifecycle_MODE>1</lifecycle_MODE>
@@ -34,9 +34,9 @@
 	<flash_frames>24</flash_frames>
 	<flash_intensity>2</flash_intensity>
 	<accent_chance>0.037625</accent_chance>
-	<accent_size>2.5</accent_size>
-	<cluster_grid>11</cluster_grid>
-	<cluster_minMass>94.55</cluster_minMass>
+	<accent_size>2.48</accent_size>
+	<cluster_grid>6</cluster_grid>
+	<cluster_minMass>89.575</cluster_minMass>
 	<cluster_minCount>5</cluster_minCount>
-	<cluster_cellDensity>65</cluster_cellDensity>
+	<cluster_cellDensity>10</cluster_cellDensity>
 </Flock_3D>

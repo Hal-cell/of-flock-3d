@@ -70,7 +70,15 @@ public:
 
 	float getWorldRadius() const { return worldRadius.get(); }
 
+	// 由 ofApp 每帧调用：传递音频参数归一化平均（0..1）
+	// 影响 trail 长度（正相关：audio 越"亮"/越"长"，尾巴越长）
+	void setAudioInfluence(float v) { audioInfluence = v; }
+
 private:
+	// 每个粒子的 trail 长度上限（编译时常量）
+	// 内存：20K particles × 24 vec3 × 12 bytes ≈ 5.5 MB（可接受）
+	static constexpr int TRAIL_MAX = 24;
+
 	struct Particle {
 		glm::vec3    pos;
 		glm::vec3    velocity;
@@ -82,8 +90,14 @@ private:
 		int          maxLifetime;
 		int          fadeInTimer;
 		int          fadeOutTimer;
-		int          flashTimer;     // > 0 = 刚 merge，剩余几帧高亮闪烁
-		float        flashScale;     // 1.0 = 普通；>1.0 = accent merge（更大闪烁）
+		int          flashTimer;
+		float        flashScale;
+
+		// Trail：环形 buffer 存最近 TRAIL_MAX 帧的位置
+		// 因为粒子运动直接由 field velocity 决定，trail 自然展示 velocity 轨迹
+		glm::vec3    trail[TRAIL_MAX];
+		int          trailWriteIdx = 0;   // 下次写入位置
+		int          trailCount    = 0;   // 已积累的有效帧数（caps at TRAIL_MAX）
 	};
 
 	std::vector<Particle> particles;
@@ -148,6 +162,14 @@ private:
 	ofParameter<int>   clusterCellDensity; // 单个 cell 算"密集"的最小粒子数（种子 + 扩展）
 	ofParameter<int>   clusterMinCount;    // 整个 cluster 总粒子数下限
 	ofParameter<float> clusterMinMass;     // 整个 cluster 总质量下限
+
+	// ─── Trail（光束尾巴）───
+	// 长度 = baseTailLen × (0.5 + audioInfluence × tailAudioSensitivity × 1.5)
+	// audioInfluence 来自 Synth：event decay / FM ratio / drone cutoff 归一化平均
+	ofParameter<int>   tailLength;             // 基础尾巴长度（帧数，0=关）
+	ofParameter<float> tailAudioSensitivity;   // 音频影响敏感度（0=纯手动，2=高度耦合）
+	ofParameter<float> tailAlpha;              // trail 整体 alpha
+	float              audioInfluence = 0.0f;  // 来自外部 setAudioInfluence()
 
 	// helpers
 	void      resizeParticles();

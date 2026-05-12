@@ -56,13 +56,17 @@ void Flock3D::buildGui(ofParameterGroup& group) {
 	group.add(accentSizeMul.set("accent size",   2.5f, 1.0f, 5.0f));      // 普通的 2.5 倍 size
 
 	// ─── Cluster detection（BFS 连通区域 + 总量阈值）───
-	// 算法：先把粒子塞进 3D grid，找出密度 ≥ cellDensity 的 cell；
-	//      BFS 把相邻密集 cell 合并成一个 cluster；
-	//      最终用 minCount + minMass 决定该 cluster 是否"成立"
 	group.add(clusterGridRes.set("cluster grid",       12,   4,   32));
 	group.add(clusterCellDensity.set("cluster cellDensity", 6, 2, 100));
 	group.add(clusterMinCount.set("cluster minCount", 30,  5,  500));
 	group.add(clusterMinMass.set("cluster minMass",   60.0f, 5.0f, 1000.0f));
+
+	// ─── Trail（光束尾巴）───
+	// length = baseLen × (0.5 + audio_influence × sensitivity × 1.5)
+	// audio_influence 综合 event decay / FM ratio / cluster cutoff
+	group.add(tailLength.set("tail length",          8,    0, int(TRAIL_MAX)));
+	group.add(tailAudioSensitivity.set("tail audio sens", 1.0f, 0.0f, 2.0f));
+	group.add(tailAlpha.set("tail alpha",            0.45f, 0.0f, 1.0f));
 }
 
 //==============================================================
@@ -110,6 +114,14 @@ void Flock3D::respawnFlockParticle(Particle& p){
 	p.fadeOutTimer = -1;
 	p.flashTimer   = 0;
 	p.flashScale   = 1.0f;
+
+	// Trail：重生时清空历史（防止位置跳变拉出长线）
+	p.trailWriteIdx = 0;
+	p.trailCount    = 0;
+	// 也把所有历史位置预填为当前位置（防止初帧渲染时残留）
+	for (int i = 0; i < TRAIL_MAX; i++) {
+		p.trail[i] = p.pos;
+	}
 }
 
 //--------------------------------------------------------------
@@ -371,6 +383,14 @@ void Flock3D::update(){
 			}
 		}
 	}
+
+	// ─── 5. Trail push：把每个活粒子当前位置推入环形 buffer ───
+	for (auto& p : particles) {
+		if (!p.alive) continue;
+		p.trail[p.trailWriteIdx] = p.pos;
+		p.trailWriteIdx = (p.trailWriteIdx + 1) % TRAIL_MAX;
+		if (p.trailCount < TRAIL_MAX) p.trailCount++;
+	}
 }
 
 //==============================================================
@@ -446,6 +466,53 @@ void Flock3D::draw(){
 	particleShader.end();
 
 	glDisable(GL_PROGRAM_POINT_SIZE);
+
+	// ─── Trail（光束尾巴）───
+	// effLen = baseLen × (0.5 + audioInfluence × sensitivity × 1.5)
+	// audio 全静（influence=0）→ 0.5x；audio 全亮（influence=1, sens=1）→ 2.0x
+	int baseLen = tailLength;
+	float sens = tailAudioSensitivity;
+	float scale = 0.5f + audioInfluence * sens * 1.5f;
+	int effLen = (int)(baseLen * scale);
+	if (effLen < 2) effLen = 0;
+	if (effLen > TRAIL_MAX) effLen = TRAIL_MAX;
+
+	if (effLen >= 2 && tailAlpha > 0.001f) {
+		ofMesh trailMesh;
+		trailMesh.setMode(OF_PRIMITIVE_LINES);
+		float tailA = tailAlpha;
+
+		for (const auto& p : particles) {
+			if (!p.alive) continue;
+			int count = std::min(p.trailCount, effLen);
+			if (count < 2) continue;
+
+			// 起始索引：在环形 buffer 里走 count 步回到 oldest 端
+			int startIdx = (p.trailWriteIdx - count + TRAIL_MAX) % TRAIL_MAX;
+
+			for (int i = 0; i < count - 1; i++) {
+				int idx0 = (startIdx + i)     % TRAIL_MAX;
+				int idx1 = (startIdx + i + 1) % TRAIL_MAX;
+
+				// Alpha fade：oldest = 0 透明 → newest = 1 不透明
+				float fadeOld = (float)(i)     / (count - 1);
+				float fadeNew = (float)(i + 1) / (count - 1);
+
+				ofFloatColor c0 = p.color;
+				ofFloatColor c1 = p.color;
+				c0.a *= fadeOld * tailA;
+				c1.a *= fadeNew * tailA;
+
+				trailMesh.addVertex(p.trail[idx0]);
+				trailMesh.addColor(c0);
+				trailMesh.addVertex(p.trail[idx1]);
+				trailMesh.addColor(c1);
+			}
+		}
+		// 在 additive blend 下渲染 → 自然 glow 光束感
+		trailMesh.draw();
+	}
+
 	ofDisableBlendMode();
 
 	cam.end();

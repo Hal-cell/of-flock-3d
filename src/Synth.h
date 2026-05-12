@@ -39,6 +39,11 @@ public:
 	// 总池大小（HUD 显示用）
 	static constexpr int getMaxDroneVoices() { return NUM_DRONE_VOICES; }
 
+	// 给 Flock3D trail 用：归一化的"音频活跃度"
+	// = (event decay + FM ratio + drone cutoff) 三者归一化平均 [0..1]
+	// trail 长度随这个值正相关（越亮/越长 → 尾巴越长）
+	float getAudioInfluenceForTail() const;
+
 	// 主线程：GUI 控件参数
 	void buildGui(ofParameterGroup& group);
 

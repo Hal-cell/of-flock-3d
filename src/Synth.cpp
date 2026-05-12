@@ -158,8 +158,6 @@ void Synth::triggerCollision(const Flock3D::CollisionEvent& ev){
 
 //--------------------------------------------------------------
 //  HUD 用：当前活跃的 drone voice 数
-//  - 包括 attack/sustain/release 各阶段
-//  - 主线程读 atomic（音频侧设置）
 //--------------------------------------------------------------
 int Synth::getActiveDroneCount() const {
 	int count = 0;
@@ -167,6 +165,21 @@ int Synth::getActiveDroneCount() const {
 		if (droneVoices[i].active.load()) count++;
 	}
 	return count;
+}
+
+//--------------------------------------------------------------
+//  给 Flock3D trail 用：归一化的音频活跃度
+//  三个核心 synth 参数都映射到 [0..1] 然后平均：
+//    event decay (50..500 ms) — 越长事件越长
+//    FM ratio (0.5..8)         — 越高泛音越复杂
+//    cluster cutoff (80..8000) — 越高 drone 越亮
+//  全部"长 / 亮 / 复杂" → 视觉尾巴正相关变长
+//--------------------------------------------------------------
+float Synth::getAudioInfluenceForTail() const {
+	float e = ofClamp((eventDecayMs.get()   - 50.0f)   / 450.0f,  0.0f, 1.0f);
+	float f = ofClamp((fmRatio.get()        - 0.5f)    / 7.5f,    0.0f, 1.0f);
+	float c = ofClamp((clusterCutoff.get()  - 80.0f)   / 7920.0f, 0.0f, 1.0f);
+	return (e + f + c) / 3.0f;
 }
 
 //==============================================================
