@@ -1,4 +1,5 @@
 #include "Flock3D.h"
+#include "ImGuiHelpers.h"
 
 //==============================================================
 //  GUI
@@ -76,6 +77,89 @@ void Flock3D::buildGui(ofParameterGroup& group) {
 	group.add(matSpecular.set("specular",       0.35f, 0.0f, 1.0f));
 	group.add(matAmbient.set("ambient",         0.25f, 0.0f, 0.5f));
 	group.add(matGlow.set("glow",               0.3f,  0.0f, 1.5f));
+}
+
+//==============================================================
+//  ImGui rendering — 把 ofParameter 渲染成现代 GUI
+//==============================================================
+void Flock3D::drawImGui() {
+	namespace ig = ImGuiHelp;
+
+	if (ig::section("General")) {
+		ig::sliderInt(particleCount);
+		ig::slider(worldRadius, "%.0f");
+		ig::slider(particleAlpha);
+		ig::check(autoRotate);
+		ig::check(showAxis);
+		ig::slider(hueBase);
+		ig::slider(hueRange);
+		ig::slider(brightness);
+	}
+
+	if (ig::section("Force Fields")) {
+		ImGui::TextDisabled("macro fields");
+		ig::slider(noiseAmplitude, "%.1f");
+		ig::sliderLog(noiseScale);
+		ig::slider(noiseSpeed);
+		ImGui::Separator();
+		ImGui::TextDisabled("flow fields (drive wind)");
+		ig::slider(vortexAmp, "%.1f");
+		ig::slider(spiralAmp, "%.1f");
+		ig::slider(curlAmp, "%.1f");
+		ImGui::Separator();
+		ImGui::TextDisabled("radial");
+		ig::slider(attractorAmp, "%.1f");
+		ig::slider(repellerAmp, "%.1f");
+	}
+
+	if (ig::section("Boid / Merge")) {
+		ig::slider(flockSeparation);
+		ig::slider(flockCohesion);
+		ig::slider(flockCohesionSpeed);
+		ig::slider(flockNeighborRadius, "%.1f");
+		ig::slider(mergeDistance, "%.1f");
+		ig::slider(flockSpawnRate, "%.0f");
+		ig::slider(flockMinAlive);
+		ig::slider(flockDamping);
+		ig::slider(particleSizeMin, "%.1f");
+		ig::slider(particleSizeMax, "%.1f");
+	}
+
+	if (ig::section("Lifecycle / Fade")) {
+		ig::check(lifecycleMode);
+		ig::sliderInt(lifespanMin);
+		ig::sliderInt(lifespanMax);
+		ImGui::Separator();
+		ig::sliderInt(fadeInFrames);
+		ig::sliderInt(fadeOutFrames);
+	}
+
+	if (ig::section("Flash / Accent")) {
+		ig::sliderInt(flashFrames);
+		ig::slider(flashIntensity);
+		ImGui::Separator();
+		ig::slider(accentChance);
+		ig::slider(accentSizeMul);
+	}
+
+	if (ig::section("Cluster Detection")) {
+		ig::sliderInt(clusterGridRes);
+		ig::sliderInt(clusterMinFlash);
+		ig::check(showClusterGrid);
+	}
+
+	if (ig::section("Trail")) {
+		ig::sliderInt(tailLength);
+		ig::slider(tailAudioSensitivity);
+		ig::slider(tailAlpha);
+	}
+
+	if (ig::section("Material")) {
+		ig::slider(matBrightness);
+		ig::slider(matSpecular);
+		ig::slider(matAmbient);
+		ig::slider(matGlow);
+	}
 }
 
 //==============================================================

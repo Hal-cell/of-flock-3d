@@ -1,4 +1,5 @@
 #include "Synth.h"
+#include "ImGuiHelpers.h"
 
 //==============================================================
 //  Setup
@@ -84,6 +85,68 @@ void Synth::buildGui(ofParameterGroup& group){
 	windGroup.add(windLfoRate.set("gust rate (Hz)",  0.4f,    0.05f,   4.0f));
 	windGroup.add(windLfoDepth.set("gust depth",     0.4f,    0.0f,    1.0f));
 	group.add(windGroup);
+}
+
+//--------------------------------------------------------------
+//  ImGui rendering — 替代 ofxPanel 的现代 GUI
+//--------------------------------------------------------------
+void Synth::drawImGui(){
+	namespace ig = ImGuiHelp;
+
+	if (ig::section("Master")) {
+		ig::check(audioEnabled);
+		ig::slider(masterVol);
+		ig::slider(rootFreq, "%.1f Hz");
+		static const std::vector<const char*> scaleNames = {
+			"penta minor", "penta major", "major (ion)", "minor (aeolian)",
+			"dorian", "mixolydian", "phrygian", "lydian",
+			"blues", "hirajoshi", "whole tone", "harmonic series"
+		};
+		ig::combo(scaleType, scaleNames);
+		ig::slider(droneGlideMs, "%.0f ms");
+	}
+
+	if (ig::section("Event (Particle Hits)")) {
+		ig::slider(eventVol);
+		ig::slider(eventDecayMs, "%.0f ms");
+		ig::slider(eventAttackMs, "%.2f ms");
+		ig::slider(eventGainPerHit);
+		ig::slider(minMassToFire, "%.1f");
+		ig::check(eventQuantize);
+	}
+
+	if (ig::section("FM (Event Tone)")) {
+		ig::slider(fmRatio, "%.2f");
+		ig::slider(fmIndex);
+		ig::slider(fmIndexDecayMs, "%.0f ms");
+		ig::slider(tailToIdxDecayDepth);
+	}
+
+	if (ig::section("Cluster Drone")) {
+		ig::slider(clusterDroneVol);
+		ig::slider(clusterAttackMs, "%.0f ms");
+		ig::slider(clusterReleaseMs, "%.0f ms");
+		ig::slider(clusterDetune, "%.4f");
+		ig::slider(clusterProximity, "%.1f");
+		ig::sliderLog(clusterCutoff, "%.0f Hz");
+		ig::slider(clusterResonance);
+	}
+
+	if (ig::section("Wind")) {
+		ig::slider(windVol);
+		ig::sliderLog(windCutoff, "%.0f Hz");
+		ig::slider(windResonance);
+		ig::slider(windAmpToCutoff);
+		ig::slider(windLfoRate, "%.2f Hz");
+		ig::slider(windLfoDepth);
+	}
+
+	if (ig::section("Hall Reverb")) {
+		ig::slider(reverbAmt);
+		ig::slider(reverbSize);
+		ig::slider(reverbDamp);
+		ig::slider(reverbPreDelayMs, "%.0f ms");
+	}
 }
 
 //--------------------------------------------------------------

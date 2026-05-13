@@ -22,6 +22,7 @@ public:
 	void draw();
 	void reset();
 	void buildGui(ofParameterGroup& group);
+	void drawImGui();   // 用 ImGui 渲染 GUI（替代 ofxPanel）
 	void keyPressed(int key);
 	std::string getName() const { return "Flock 3D"; }
 

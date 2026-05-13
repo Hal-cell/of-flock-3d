@@ -1,7 +1,8 @@
 #pragma once
 
 #include "ofMain.h"
-#include "ofxGui.h"
+#include "ofxGui.h"        // ofxPanel 保留（仅用于 XML save/load 持久化，不渲染）
+#include "ofxImGui.h"      // 新 GUI 渲染
 #include "Flock3D.h"
 #include "Synth.h"
 
@@ -23,11 +24,15 @@ private:
 
 	ofSoundStream soundStream;
 
-	// 两个独立的参数组 + panel（Flock + Synth）
+	// 参数组保留 → ofxPanel 处理 XML save/load（不渲染界面，只做持久化）
 	ofParameterGroup flockParams;
 	ofParameterGroup synthParams;
 	ofxPanel flockGui;
 	ofxPanel synthGui;
+
+	// 新 GUI（ofxImGui）
+	ofxImGui::Gui imgui;
+	void applyImGuiTheme();
 
 	bool showGui   = true;
 	bool recording = false;

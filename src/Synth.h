@@ -52,6 +52,7 @@ public:
 
 	// 主线程：GUI 控件参数
 	void buildGui(ofParameterGroup& group);
+	void drawImGui();   // 用 ImGui 渲染 GUI（替代 ofxPanel）
 
 	// 音阶切换
 	enum Scale {
