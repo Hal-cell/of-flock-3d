@@ -70,8 +70,9 @@ void Flock3D::buildGui(ofParameterGroup& group) {
 	group.add(tailAudioSensitivity.set("tail audio sens", 1.0f, 0.0f, 2.0f));
 	group.add(tailAlpha.set("tail alpha",            0.45f, 0.0f, 1.0f));
 
-	// ─── Material（着色小球 + 可选 halo）───
-	// 整体 dim，flash 时自动跳过 shading（让 white-lerp 干净突出）
+	// ─── Material ───
+	// shaderType: 0=sphere（默认新版，3D 着色 + 可调 halo），1=classic（rp-24 简单软盘）
+	group.add(shaderType.set("shader (0=sphere 1=classic)", 0, 0, 1));
 	group.add(matBrightness.set("brightness",   0.55f, 0.0f, 1.0f));
 	group.add(matSpecular.set("specular",       0.35f, 0.0f, 1.0f));
 	group.add(matAmbient.set("ambient",         0.25f, 0.0f, 0.5f));
@@ -483,13 +484,20 @@ void Flock3D::draw(){
 	ofEnableBlendMode(OF_BLENDMODE_ADD);
 	glEnable(GL_PROGRAM_POINT_SIZE);
 
-	particleShader.begin();
-	particleShader.setUniform1f("uBrightness", matBrightness);
-	particleShader.setUniform1f("uSpecular",   matSpecular);
-	particleShader.setUniform1f("uAmbient",    matAmbient);
-	particleShader.setUniform1f("uGlow",       matGlow);
-	particleMesh.draw();
-	particleShader.end();
+	// shader 切换：0 = sphere + halo（默认新版），1 = classic（rp-24 软盘）
+	if (shaderType.get() == 1) {
+		particleShaderClassic.begin();
+		particleMesh.draw();
+		particleShaderClassic.end();
+	} else {
+		particleShader.begin();
+		particleShader.setUniform1f("uBrightness", matBrightness);
+		particleShader.setUniform1f("uSpecular",   matSpecular);
+		particleShader.setUniform1f("uAmbient",    matAmbient);
+		particleShader.setUniform1f("uGlow",       matGlow);
+		particleMesh.draw();
+		particleShader.end();
+	}
 
 	glDisable(GL_PROGRAM_POINT_SIZE);
 
@@ -926,4 +934,48 @@ void Flock3D::loadShaderInline(){
 	particleShader.setupShaderFromSource(GL_FRAGMENT_SHADER, frag);
 	particleShader.bindDefaults();
 	particleShader.linkProgram();
+
+	// ═══════════════════════════════════════════════════════════════
+	// Classic shader（rp-24 风格）：简单 smoothstep 软盘，无 shading
+	// ═══════════════════════════════════════════════════════════════
+	std::string vertClassic = R"(
+		#version 150
+		uniform mat4 modelViewProjectionMatrix;
+		uniform mat4 modelViewMatrix;
+		in vec4 position;
+		in vec4 color;
+		in vec2 texcoord;
+
+		out vec4 vColor;
+
+		void main(){
+			vec4 viewPos = modelViewMatrix * position;
+			float dist   = max(1.0, length(viewPos.xyz));
+
+			gl_Position  = modelViewProjectionMatrix * position;
+			gl_PointSize = clamp(texcoord.x * 1000.0 / dist, 0.8, 96.0);
+
+			float depthFade = clamp(1100.0 / dist, 0.10, 2.0);
+			float alphaFade = clamp(900.0 / dist, 0.20, 1.5);
+			vColor = vec4(color.rgb * depthFade, color.a * alphaFade);
+		}
+	)";
+
+	std::string fragClassic = R"(
+		#version 150
+		in  vec4 vColor;
+		out vec4 fragColor;
+		void main(){
+			vec2 c = gl_PointCoord - vec2(0.5);
+			float d = length(c);
+			if (d > 0.5) discard;
+			float alpha = smoothstep(0.5, 0.0, d);
+			fragColor = vec4(vColor.rgb, vColor.a * alpha);
+		}
+	)";
+
+	particleShaderClassic.setupShaderFromSource(GL_VERTEX_SHADER,   vertClassic);
+	particleShaderClassic.setupShaderFromSource(GL_FRAGMENT_SHADER, fragClassic);
+	particleShaderClassic.bindDefaults();
+	particleShaderClassic.linkProgram();
 }

@@ -24,8 +24,8 @@
 	<spawn_rate>40000</spawn_rate>
 	<min_alive>0.89</min_alive>
 	<damping>0.95</damping>
-	<sizeMin>2.14</sizeMin>
-	<sizeMax>6.06</sizeMax>
+	<sizeMin>2.26543</sizeMin>
+	<sizeMax>8.18289</sizeMax>
 	<lifecycle_MODE>1</lifecycle_MODE>
 	<life_min_frames>180</life_min_frames>
 	<life_max_frames>600</life_max_frames>
@@ -46,5 +46,6 @@
 	<cluster_minFlash>18</cluster_minFlash>
 	<show_cluster_grid>0</show_cluster_grid>
 	<specular>0.643789</specular>
-	<ambient>0</ambient>
+	<ambient>0.443301</ambient>
+	<glow>0.00990234</glow>
 </Flock_3D>

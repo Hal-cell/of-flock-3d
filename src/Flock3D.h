@@ -124,7 +124,8 @@ private:
 	std::vector<Particle> particles;
 	std::vector<CollisionEvent> collisionsThisFrame;   // 每帧清空，update 内累积
 	ofEasyCam cam;
-	ofShader  particleShader;
+	ofShader  particleShader;          // sphere + halo（默认，rp-27+）
+	ofShader  particleShaderClassic;   // 简单 smoothstep 软盘（rp-24 风格）
 
 	// 复用的 mesh 对象（避免每帧重新分配；vector capacity 保留）
 	ofMesh particleMesh;
@@ -206,6 +207,7 @@ private:
 	// ─── Material（着色 3D 小球 + 可调 halo）───
 	// sphere 占内 70%（Lambert + 小高光）；halo 占外 30% 软光
 	// 整体保持 dim，让 merge flash（white-lerp）能突出对比
+	ofParameter<int>   shaderType;      // 0 = sphere (新)，1 = classic (rp-24 软盘)
 	ofParameter<float> matBrightness;   // 整体亮度 0..1
 	ofParameter<float> matSpecular;     // 镜面高光强度 0..1
 	ofParameter<float> matAmbient;      // 暗面填充（避免黑死）0..0.5
