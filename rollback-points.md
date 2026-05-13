@@ -422,3 +422,24 @@ effective_len = base_len × (0.5 + audio_influence × sensitivity × 1.5)
 **Use this checkpoint to**:
 - 拖 GUI 到副屏 / 演出环境分离控制
 - 全屏 flock 时 GUI 不会盖住视觉
+
+## rp-33 — 粒子软边 + 性能优化
+
+**Commit**: `git tag rp-33-aa-perf`
+
+**视觉质量（毛边消除）**:
+- 根因：`GL_POINTS` 不受 MSAA 影响，硬 `discard` 产生像素级锯齿
+- Fragment shader 用 `fwidth(d)` 做屏幕空间软边（自适应 zoom，1-2 像素渐变）
+- Sphere → halo 用 `smoothstep` 软化（去掉可见的"圈"）
+- 无分支 sphere shading（mask 软化代替 `if`），GPU pipeline 更稳定
+- `clamp(fwidth, 0.001, 0.08)` 防止小粒子（<4px）被过度吞掉
+
+**性能（无质量损失）**:
+- XorShift32 PRNG 替代 `std::rand()` — boid loop 200K calls/frame，
+  std::rand ~30ns（libc mutex + LCG）→ XorShift ~1ns，省 ~5ms/frame
+- Trail push 用 `if (++idx >= MAX) idx=0` 替代整数 modulo
+- PRNG state seeded in `setup()` 用 `ofGetElapsedTimeMicros()`
+
+**Use this checkpoint to**:
+- 任何"粒子有锯齿/毛边"复发的回滚基线
+- 性能调优实验起点（如果还有更多 perf 工作要做）

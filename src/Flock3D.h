@@ -127,6 +127,22 @@ private:
 	ofEasyCam cam;
 	ofShader  particleShader;
 
+	// Fast XorShift32 PRNG（替代 std::rand — 200K calls/frame × ~30ns 节省 ~6ms）
+	// 无 libc lock，每 call ~1ns。每个 Flock3D 实例有独立 state
+	mutable uint32_t prngState = 0x12345678u;
+	inline uint32_t fastRand() const {
+		uint32_t x = prngState;
+		x ^= x << 13;
+		x ^= x >> 17;
+		x ^= x << 5;
+		prngState = x;
+		return x;
+	}
+	// 等价于 std::rand() % n，但避免取模 div（用 64-bit mul + shift）
+	inline int fastRandBelow(int n) const {
+		return (int)(((uint64_t)fastRand() * (uint64_t)n) >> 32);
+	}
+
 	// 复用的 mesh 对象（避免每帧重新分配；vector capacity 保留）
 	ofMesh particleMesh;
 	ofMesh trailMesh;

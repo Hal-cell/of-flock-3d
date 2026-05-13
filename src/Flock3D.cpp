@@ -175,6 +175,11 @@ void Flock3D::setup(int w, int h){
 	cam.setPosition(700.0f, -400.0f, 700.0f);
 	cam.lookAt(glm::vec3(0));
 
+	// Seed XorShift PRNG（避免全 0 lock 状态；混入 frame time）
+	uint64_t t = (uint64_t)(ofGetElapsedTimeMicros() | 1);
+	prngState = (uint32_t)(t ^ (t >> 32));
+	if (prngState == 0) prngState = 0xC0FFEE13u;
+
 	loadShaderInline();
 	resizeParticles();
 }
@@ -378,7 +383,7 @@ void Flock3D::update(){
 		int cohesionCount = 0;
 
 		for (int k = 0; k < K; k++) {
-			int j = std::rand() % n;
+			int j = fastRandBelow(n);   // 替代 std::rand() % n（避免 libc lock）
 			if (j == i) continue;
 			auto& q = particles[j];
 			if (!q.alive) continue;
@@ -478,10 +483,12 @@ void Flock3D::update(){
 	}
 
 	// ─── 5. Trail push：把每个活粒子当前位置推入环形 buffer ───
+	// 用 if/-- 替代 modulo（TRAIL_MAX=24 不是 2 的幂，整数 mod 是 div 指令；
+	// 每帧 20K × 1 = 20K mod，省下来不多但是干净）
 	for (auto& p : particles) {
 		if (!p.alive) continue;
 		p.trail[p.trailWriteIdx] = p.pos;
-		p.trailWriteIdx = (p.trailWriteIdx + 1) % TRAIL_MAX;
+		if (++p.trailWriteIdx >= TRAIL_MAX) p.trailWriteIdx = 0;
 		if (p.trailCount < TRAIL_MAX) p.trailCount++;
 	}
 }
@@ -944,6 +951,11 @@ void Flock3D::loadShaderInline(){
 	//   非 flash 时：sphere（内 70%）+ halo（外 30%）
 	//   flash 时：切到 rp-24 风格 — 简单 smoothstep 软盘（整面发光，无 shading）
 	//   两种模式按 flashWeight 平滑 crossfade
+	//
+	// 抗锯齿（毛边消除）：
+	//   GL_POINTS 不受 MSAA 影响，所以用 fwidth-based screen-space AA。
+	//   - 外圈边缘用 fwidth 软渐变（替代硬 discard）
+	//   - sphere → halo 过渡用 smoothstep 软化
 	std::string frag = R"(
 		#version 150
 		uniform float uBrightness;
@@ -957,8 +969,13 @@ void Flock3D::loadShaderInline(){
 		void main(){
 			vec2 c = gl_PointCoord - vec2(0.5);
 			float d2 = dot(c, c);
-			if (d2 > 0.25) discard;
+			// 早期 discard 留出 anti-aliased 边缘宽度（0.5 + 2px ≈ 0.55²）
+			if (d2 > 0.30) discard;
 			float d = sqrt(d2);
+
+			// 屏幕空间像素宽度（自适应 zoom level，1-2 像素的软渐变）
+			// 用 clamp 防止小粒子（< 4px）fwidth 过大反而被完全吞掉
+			float aaW = clamp(fwidth(d), 0.001, 0.08);
 
 			// Flash detect（color → 白时高）
 			float vBright = (vColor.r + vColor.g + vColor.b) / 3.0;
@@ -970,24 +987,25 @@ void Flock3D::loadShaderInline(){
 			const float sphereR  = 0.35;
 			const float sphereR2 = sphereR * sphereR;
 
-			vec3  sphereCol = vec3(0.0);
-			float sphereA   = 0.0;
+			// Sphere 软边（sphereR 处 1.0 → sphereR+aa 处 0.0），消除内外硬边
+			float sphereMask = 1.0 - smoothstep(sphereR - aaW, sphereR + aaW, d);
 
-			if (d2 <= sphereR2) {
-				float z = sqrt(sphereR2 - d2);
-				vec3 N = vec3(c.x, c.y, z) / sphereR;
-				vec3 L = normalize(vec3(-0.4, -0.5, 0.7));
-				vec3 V = vec3(0.0, 0.0, 1.0);
-				vec3 H = normalize(L + V);
-				float NdotL = max(0.0, dot(N, L));
-				float diffuse = NdotL * (1.0 - uAmbient) + uAmbient;
-				float NdotH = max(0.0, dot(N, H));
-				float spec = pow(NdotH, 28.0) * uSpecular;
-				vec3 baseCol = vColor.rgb * vDepthFade * uBrightness;
-				sphereCol = baseCol * diffuse + vec3(spec) * vDepthFade;
-				sphereA = vColor.a;
-			}
-			// halo zone
+			// Sphere shading：始终算（不用 if 分支，更稳定 + GPU 友好）
+			// d > sphereR 区域被 sphereMask 软化为 0，不会产生瑕疵
+			float z = sqrt(max(sphereR2 - d2, 0.0));
+			vec3 N = vec3(c.x, c.y, z) / sphereR;
+			vec3 L = normalize(vec3(-0.4, -0.5, 0.7));
+			vec3 V = vec3(0.0, 0.0, 1.0);
+			vec3 H = normalize(L + V);
+			float NdotL = max(0.0, dot(N, L));
+			float diffuse = NdotL * (1.0 - uAmbient) + uAmbient;
+			float NdotH = max(0.0, dot(N, H));
+			float spec = pow(NdotH, 28.0) * uSpecular;
+			vec3 baseCol = vColor.rgb * vDepthFade * uBrightness;
+			vec3 sphereCol = (baseCol * diffuse + vec3(spec) * vDepthFade) * sphereMask;
+			float sphereA = vColor.a * sphereMask;
+
+			// halo zone — 从 sphereR 渐变到 0.5（外圈）
 			if (uGlow > 0.001) {
 				float t = smoothstep(0.5, sphereR * 0.85, d);
 				float haloI = t * t * uGlow;
@@ -1006,6 +1024,11 @@ void Flock3D::loadShaderInline(){
 			// 按 flashWeight crossfade 两种模式
 			vec3 outCol = mix(sphereCol, discCol, flashWeight);
 			float outA  = mix(sphereA, discA, flashWeight);
+
+			// ★ 外圈边缘 anti-aliasing：fwidth-based 软渐变（自适应距离）
+			// 在边缘 0.5 处过渡 1→0，宽度 ~1.5 像素，自动消除锯齿
+			float edgeAA = 1.0 - smoothstep(0.5 - aaW * 1.5, 0.5, d);
+			outA *= edgeAA;
 
 			fragColor = vec4(outCol, outA);
 		}
