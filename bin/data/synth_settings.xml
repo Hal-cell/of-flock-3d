@@ -6,7 +6,7 @@
 	<voiceVol>0.7</voiceVol>
 	<reverbAmt>0.815</reverbAmt>
 	<rootFreq__Hz_>91.575</rootFreq__Hz_>
-	<scale>1</scale>
+	<scale>0</scale>
 	<eventVol>0.735</eventVol>
 	<decay__ms_>163.4</decay__ms_>
 	<hit_gain>0.5865</hit_gain>

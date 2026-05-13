@@ -71,8 +71,7 @@ void Flock3D::buildGui(ofParameterGroup& group) {
 	group.add(tailAlpha.set("tail alpha",            0.45f, 0.0f, 1.0f));
 
 	// ─── Material ───
-	// shaderType: 0=sphere（默认新版，3D 着色 + 可调 halo），1=classic（rp-24 简单软盘）
-	group.add(shaderType.set("shader (0=sphere 1=classic)", 0, 0, 1));
+	// 默认 sphere 着色 + 可调 halo；flash 时自动切到 rp-24 风格软盘（碰撞瞬间突出）
 	group.add(matBrightness.set("brightness",   0.55f, 0.0f, 1.0f));
 	group.add(matSpecular.set("specular",       0.35f, 0.0f, 1.0f));
 	group.add(matAmbient.set("ambient",         0.25f, 0.0f, 0.5f));
@@ -484,20 +483,13 @@ void Flock3D::draw(){
 	ofEnableBlendMode(OF_BLENDMODE_ADD);
 	glEnable(GL_PROGRAM_POINT_SIZE);
 
-	// shader 切换：0 = sphere + halo（默认新版），1 = classic（rp-24 软盘）
-	if (shaderType.get() == 1) {
-		particleShaderClassic.begin();
-		particleMesh.draw();
-		particleShaderClassic.end();
-	} else {
-		particleShader.begin();
-		particleShader.setUniform1f("uBrightness", matBrightness);
-		particleShader.setUniform1f("uSpecular",   matSpecular);
-		particleShader.setUniform1f("uAmbient",    matAmbient);
-		particleShader.setUniform1f("uGlow",       matGlow);
-		particleMesh.draw();
-		particleShader.end();
-	}
+	particleShader.begin();
+	particleShader.setUniform1f("uBrightness", matBrightness);
+	particleShader.setUniform1f("uSpecular",   matSpecular);
+	particleShader.setUniform1f("uAmbient",    matAmbient);
+	particleShader.setUniform1f("uGlow",       matGlow);
+	particleMesh.draw();
+	particleShader.end();
 
 	glDisable(GL_PROGRAM_POINT_SIZE);
 
@@ -864,16 +856,16 @@ void Flock3D::loadShaderInline(){
 		}
 	)";
 
-	// Fragment: 着色 sphere（内 70%）+ 可调 halo（外 30%）
-	// gl_PointCoord 0..1 → 把它当 sphere 的 (x,y)，反算 hemisphere normal
-	// Lambert + 小高光，整体 dim；halo 在 sphere 外圈柔光发散
-	// Flash detection 让 flash 粒子跳过 shading，flat-white 突出
+	// Fragment:
+	//   非 flash 时：sphere（内 70%）+ halo（外 30%）
+	//   flash 时：切到 rp-24 风格 — 简单 smoothstep 软盘（整面发光，无 shading）
+	//   两种模式按 flashWeight 平滑 crossfade
 	std::string frag = R"(
 		#version 150
 		uniform float uBrightness;
 		uniform float uSpecular;
 		uniform float uAmbient;
-		uniform float uGlow;          // halo 强度
+		uniform float uGlow;
 		in  vec4  vColor;
 		in  float vDepthFade;
 		out vec4 fragColor;
@@ -881,50 +873,55 @@ void Flock3D::loadShaderInline(){
 		void main(){
 			vec2 c = gl_PointCoord - vec2(0.5);
 			float d2 = dot(c, c);
-			if (d2 > 0.25) discard;            // 整个 sprite 边外丢
+			if (d2 > 0.25) discard;
 			float d = sqrt(d2);
 
-			// Sphere 占内 70%（disc 半径 0.35）；halo 占 0.35..0.5
+			// Flash detect（color → 白时高）
+			float vBright = (vColor.r + vColor.g + vColor.b) / 3.0;
+			float flashWeight = smoothstep(0.65, 0.95, vBright);
+
+			// ════════════════════════════════════════════════════════════
+			// Mode A — Sphere + halo（非 flash）
+			// ════════════════════════════════════════════════════════════
 			const float sphereR  = 0.35;
 			const float sphereR2 = sphereR * sphereR;
 
-			vec3  outCol = vec3(0.0);
-			float outA   = 0.0;
+			vec3  sphereCol = vec3(0.0);
+			float sphereA   = 0.0;
 
-			// ─── Sphere zone（d < 0.35）：Lambert + Spec 着色 ───
 			if (d2 <= sphereR2) {
 				float z = sqrt(sphereR2 - d2);
-				vec3 N = vec3(c.x, c.y, z) / sphereR;   // 单位法向
-
+				vec3 N = vec3(c.x, c.y, z) / sphereR;
 				vec3 L = normalize(vec3(-0.4, -0.5, 0.7));
 				vec3 V = vec3(0.0, 0.0, 1.0);
 				vec3 H = normalize(L + V);
-
 				float NdotL = max(0.0, dot(N, L));
 				float diffuse = NdotL * (1.0 - uAmbient) + uAmbient;
-
 				float NdotH = max(0.0, dot(N, H));
 				float spec = pow(NdotH, 28.0) * uSpecular;
-
-				// Flash detect：颜色发白 → 跳过 shading（让 flash 跳出来）
-				float vBright = (vColor.r + vColor.g + vColor.b) / 3.0;
-				float flashWeight = smoothstep(0.65, 0.95, vBright);
-				diffuse = mix(diffuse, 1.0, flashWeight);
-
 				vec3 baseCol = vColor.rgb * vDepthFade * uBrightness;
-				outCol = baseCol * diffuse + vec3(spec) * vDepthFade;
-				outA   = vColor.a * mix(0.85, 1.0, flashWeight);
+				sphereCol = baseCol * diffuse + vec3(spec) * vDepthFade;
+				sphereA = vColor.a;
+			}
+			// halo zone
+			if (uGlow > 0.001) {
+				float t = smoothstep(0.5, sphereR * 0.85, d);
+				float haloI = t * t * uGlow;
+				sphereCol += vColor.rgb * vDepthFade * uBrightness * haloI;
+				sphereA = max(sphereA, haloI * vColor.a * 0.6);
 			}
 
-			// ─── Halo zone（sphere 外）：柔光，二次衰减 ───
-			if (uGlow > 0.001) {
-				// 内边 sphereR → 强；外边 0.5 → 0；quadratic 衰减让形态柔和
-				float t = smoothstep(0.5, sphereR * 0.85, d);   // 0..1
-				float haloI = t * t * uGlow;
-				vec3 haloCol = vColor.rgb * vDepthFade * uBrightness * haloI;
-				outCol += haloCol;
-				outA = max(outA, haloI * vColor.a * 0.6);
-			}
+			// ════════════════════════════════════════════════════════════
+			// Mode B — rp-24 风格软盘（flash 时使用）
+			// 简单 smoothstep alpha 软盘，颜色不加处理
+			// ════════════════════════════════════════════════════════════
+			float discAlpha = smoothstep(0.5, 0.0, d);
+			vec3 discCol = vColor.rgb;
+			float discA = vColor.a * discAlpha;
+
+			// 按 flashWeight crossfade 两种模式
+			vec3 outCol = mix(sphereCol, discCol, flashWeight);
+			float outA  = mix(sphereA, discA, flashWeight);
 
 			fragColor = vec4(outCol, outA);
 		}
@@ -934,48 +931,4 @@ void Flock3D::loadShaderInline(){
 	particleShader.setupShaderFromSource(GL_FRAGMENT_SHADER, frag);
 	particleShader.bindDefaults();
 	particleShader.linkProgram();
-
-	// ═══════════════════════════════════════════════════════════════
-	// Classic shader（rp-24 风格）：简单 smoothstep 软盘，无 shading
-	// ═══════════════════════════════════════════════════════════════
-	std::string vertClassic = R"(
-		#version 150
-		uniform mat4 modelViewProjectionMatrix;
-		uniform mat4 modelViewMatrix;
-		in vec4 position;
-		in vec4 color;
-		in vec2 texcoord;
-
-		out vec4 vColor;
-
-		void main(){
-			vec4 viewPos = modelViewMatrix * position;
-			float dist   = max(1.0, length(viewPos.xyz));
-
-			gl_Position  = modelViewProjectionMatrix * position;
-			gl_PointSize = clamp(texcoord.x * 1000.0 / dist, 0.8, 96.0);
-
-			float depthFade = clamp(1100.0 / dist, 0.10, 2.0);
-			float alphaFade = clamp(900.0 / dist, 0.20, 1.5);
-			vColor = vec4(color.rgb * depthFade, color.a * alphaFade);
-		}
-	)";
-
-	std::string fragClassic = R"(
-		#version 150
-		in  vec4 vColor;
-		out vec4 fragColor;
-		void main(){
-			vec2 c = gl_PointCoord - vec2(0.5);
-			float d = length(c);
-			if (d > 0.5) discard;
-			float alpha = smoothstep(0.5, 0.0, d);
-			fragColor = vec4(vColor.rgb, vColor.a * alpha);
-		}
-	)";
-
-	particleShaderClassic.setupShaderFromSource(GL_VERTEX_SHADER,   vertClassic);
-	particleShaderClassic.setupShaderFromSource(GL_FRAGMENT_SHADER, fragClassic);
-	particleShaderClassic.bindDefaults();
-	particleShaderClassic.linkProgram();
 }

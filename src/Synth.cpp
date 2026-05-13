@@ -41,7 +41,11 @@ void Synth::buildGui(ofParameterGroup& group){
 	group.add(reverbDamp.set("reverbDamp",       0.5f,  0.0f, 0.99f));     // HF 衰减
 	group.add(reverbPreDelayMs.set("reverb preDelay (ms)", 20.0f, 0.0f, 200.0f));
 	group.add(rootFreq.set("rootFreq (Hz)",      110.0f, 55.0f, 440.0f));
+	// scale: 0=pentaMin 1=pentaMaj 2=major 3=minor 4=dorian 5=mixolydian
+	//        6=phrygian 7=lydian 8=blues 9=hirajoshi 10=wholeTone 11=harmonic
 	group.add(scaleType.set("scale",             0, 0, int(SCALE_COUNT) - 1));
+	// 当 scale 切换时，drone voice 沿这个时长 glide 到新音高（ms）
+	group.add(droneGlideMs.set("drone glide (ms)", 600.0f, 5.0f, 4000.0f));
 
 	// ─── FM 子组（2-op：carrier + modulator）───
 	// 一些典型 ratio 玩法：
@@ -260,6 +264,23 @@ int Synth::pickFreshSemitone() const {
 void Synth::updateClusterVoices(const std::vector<Flock3D::Cluster>& clusters, float wr){
 	a_worldRadius.store(wr);
 
+	// ─── Scale 切换检测：所有活 voice 重新对齐到新 scale（保留 currentFreq → 自动 glide）───
+	int curScale = scaleType.get();
+	if (curScale != lastScaleType) {
+		lastScaleType = curScale;
+		for (int i = 0; i < NUM_DRONE_VOICES; i++) {
+			if (!droneTracking[i].active) continue;
+			// 用当前 semitone 重新量化到新 scale → 新的 targetFreq
+			int   oldSemi  = droneTracking[i].semitone;
+			float candFreq = rootFreq * powf(2.0f, oldSemi / 12.0f);
+			float newFreq  = quantizeToScale(candFreq);
+			int   newSemi  = (int)roundf(12.0f * log2f(newFreq / rootFreq));
+			droneTracking[i].semitone = newSemi;
+			droneVoices[i].targetFreq.store(newFreq);
+			// currentFreq 不重置 → 在音频线程里以 glideCoef 平滑过渡
+		}
+	}
+
 	std::array<bool, NUM_DRONE_VOICES> matched{};
 	matched.fill(false);
 
@@ -430,6 +451,12 @@ void Synth::audioOut(ofSoundBuffer& buffer){
 	float detune = clusterDetune;
 	float detuneRatios[3] = {1.0f, 1.0f + detune, 1.0f - detune};
 
+	// Glide 系数：exp 衰减，~ glideMs 内到达 95% 目标
+	float glideMs = ofClamp(droneGlideMs.get(), 1.0f, 10000.0f);
+	float glideSamples = glideMs * 0.001f * sampleRate;
+	float glideCoef = 3.0f / std::max(1.0f, glideSamples);
+	if (glideCoef > 1.0f) glideCoef = 1.0f;
+
 	// ─── 预算 Wind 层参数（per-buffer，每 sample 不变）───
 	float wndVol = windVol;                                                    // 独立音量
 	float wndCutoffBase = ofClamp(windCutoff.get(), 50.0f, sampleRate * 0.4f); // base cutoff
@@ -467,7 +494,8 @@ void Synth::audioOut(ofSoundBuffer& buffer){
 					if (dv.currentVol < tVol) dv.currentVol = tVol;
 				}
 
-				dv.currentFreq += (tFreq - dv.currentFreq) * 0.0005f;
+				// Pitch glide：用 droneGlideMs 控制，scale 切换时这里自动滑过去
+				dv.currentFreq += (tFreq - dv.currentFreq) * glideCoef;
 				dv.currentPan  += (tPan - dv.currentPan)  * 0.001f;
 
 				if (dv.currentVol <= 0.0f && tVol <= 0.0f) continue;
@@ -667,12 +695,20 @@ void Synth::audioOut(ofSoundBuffer& buffer){
 //==============================================================
 float Synth::quantizeToScale(float freq) const {
 	// 把任意频率量化到当前 scale 的最近一个音
-	// 各 scale 用半音 offset 表示（相对 root）
+	// 每种 scale 用半音 offset 表示（相对 root），顺序对应 Synth::Scale enum
 	static const std::vector<std::vector<int>> scales = {
-		{0, 3, 5, 7, 10},        // pentatonic minor: A C D E G
-		{0, 2, 4, 6, 7, 9, 11},  // Lydian
-		{0, 2, 4, 6, 8, 10},     // whole tone
-		{0, 12, 19, 24, 28, 31}, // harmonic series intervals (oct, 5th, oct, maj3, 5th)
+		{0, 3, 5, 7, 10},          // SCALE_PENTA_MIN  五声小调
+		{0, 2, 4, 7, 9},           // SCALE_PENTA_MAJ  五声大调
+		{0, 2, 4, 5, 7, 9, 11},    // SCALE_MAJOR      自然大调（Ionian）
+		{0, 2, 3, 5, 7, 8, 10},    // SCALE_MINOR_NAT  自然小调（Aeolian）
+		{0, 2, 3, 5, 7, 9, 10},    // SCALE_DORIAN     多利亚
+		{0, 2, 4, 5, 7, 9, 10},    // SCALE_MIXOLYDIAN 米索利底亚
+		{0, 1, 3, 5, 7, 8, 10},    // SCALE_PHRYGIAN   弗里几亚（西班牙）
+		{0, 2, 4, 6, 7, 9, 11},    // SCALE_LYDIAN     利底亚（梦幻 +4）
+		{0, 3, 5, 6, 7, 10},       // SCALE_BLUES      蓝调
+		{0, 2, 3, 7, 8},           // SCALE_HIRAJOSHI  平调子（日本）
+		{0, 2, 4, 6, 8, 10},       // SCALE_WHOLE_TONE 全音
+		{0, 12, 19, 24, 28, 31},   // SCALE_HARMONIC   谐波系列
 	};
 	int sIdx = ofClamp((int)scaleType, 0, (int)scales.size() - 1);
 	const auto& scale = scales[sIdx];

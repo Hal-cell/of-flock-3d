@@ -55,9 +55,17 @@ public:
 
 	// 音阶切换
 	enum Scale {
-		SCALE_PENTA_MIN = 0,   // A minor pentatonic
-		SCALE_LYDIAN,          // C Lydian
-		SCALE_WHOLE_TONE,      // 6 等分
+		SCALE_PENTA_MIN = 0,   // 五声小调 (A C D E G)
+		SCALE_PENTA_MAJ,       // 五声大调 (A B C# E F#)
+		SCALE_MAJOR,           // 自然大调 (Ionian)
+		SCALE_MINOR_NAT,       // 自然小调 (Aeolian)
+		SCALE_DORIAN,          // 多利亚（爵士常用）
+		SCALE_MIXOLYDIAN,      // 米索利底亚
+		SCALE_PHRYGIAN,        // 弗里几亚（西班牙风）
+		SCALE_LYDIAN,          // 利底亚（梦幻 +4 度）
+		SCALE_BLUES,           // 蓝调音阶
+		SCALE_HIRAJOSHI,       // 平调子（日本五声）
+		SCALE_WHOLE_TONE,      // 全音音阶（dreamy / 印象派）
 		SCALE_HARMONIC,        // 谐波序列（A2 基频）
 		SCALE_COUNT
 	};
@@ -78,6 +86,7 @@ private:
 	ofParameter<bool>  eventQuantize;  // pitch 量化到 scale
 	ofParameter<float> minMassToFire;  // 低于此质量的碰撞被忽略
 	ofParameter<bool>  audioEnabled;
+	ofParameter<float> droneGlideMs;   // drone voice 音高变化时的 glide 时长（ms，用于 scale 切换）
 
 	// ─── FM 参数（2-op：carrier + modulator）───
 	// fmRatio 在 GUI 是连续 float，使用时 snap 到 0.5 倍数
@@ -158,6 +167,9 @@ private:
 
 	// 来自 Flock3D：6 个 field amp 总和归一化（0..1），驱动风声音量
 	std::atomic<float> a_fieldAmpTotal{0.0f};
+
+	// 检测 scale 切换（主线程）：记上次值，变化时让所有活 voice 重新对齐到新 scale
+	int lastScaleType = -1;
 
 	// ─── EventVoices（粒子触发的短促音，2-op FM 合成）───
 	// 经典 Chowning FM：carrier + modulator
