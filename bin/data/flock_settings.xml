@@ -1,25 +1,25 @@
 <?xml version="1.0"?>
 <Flock_3D>
-	<particles>17195</particles>
+	<particles>14810</particles>
 	<world_radius>250</world_radius>
 	<alpha>0.6</alpha>
 	<autoRotate>0</autoRotate>
 	<show_axis>0</show_axis>
-	<hueBase>0.55</hueBase>
-	<hueRange>0.2</hueRange>
+	<hueBase>0.523789</hueBase>
+	<hueRange>0.095125</hueRange>
 	<brightness>1</brightness>
 	<noise_amp>156</noise_amp>
 	<noise_scale>0.009082</noise_scale>
 	<noise_speed>0.24</noise_speed>
-	<vortex_amp>49</vortex_amp>
+	<vortex_amp>159.758</vortex_amp>
 	<spiral_amp>0</spiral_amp>
-	<curl_amp>0</curl_amp>
+	<curl_amp>176.758</curl_amp>
 	<attractor_amp>63</attractor_amp>
 	<repeller_amp>51</repeller_amp>
-	<flock_sep>0.6</flock_sep>
-	<flock_coh>11.848</flock_coh>
+	<flock_sep>1.09395</flock_sep>
+	<flock_coh>15.8758</flock_coh>
 	<coh_speed>0.181201</coh_speed>
-	<flock_nbrR>78.9965</flock_nbrR>
+	<flock_nbrR>62.1777</flock_nbrR>
 	<merge_dist>6</merge_dist>
 	<spawn_rate>40000</spawn_rate>
 	<min_alive>0.89</min_alive>
@@ -45,4 +45,6 @@
 	<cluster_sensitivity>1</cluster_sensitivity>
 	<cluster_minFlash>18</cluster_minFlash>
 	<show_cluster_grid>0</show_cluster_grid>
+	<specular>0.643789</specular>
+	<ambient>0</ambient>
 </Flock_3D>

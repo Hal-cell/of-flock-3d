@@ -70,11 +70,12 @@ void Flock3D::buildGui(ofParameterGroup& group) {
 	group.add(tailAudioSensitivity.set("tail audio sens", 1.0f, 0.0f, 2.0f));
 	group.add(tailAlpha.set("tail alpha",            0.45f, 0.0f, 1.0f));
 
-	// ─── Material（着色小球）───
+	// ─── Material（着色小球 + 可选 halo）───
 	// 整体 dim，flash 时自动跳过 shading（让 white-lerp 干净突出）
 	group.add(matBrightness.set("brightness",   0.55f, 0.0f, 1.0f));
 	group.add(matSpecular.set("specular",       0.35f, 0.0f, 1.0f));
 	group.add(matAmbient.set("ambient",         0.25f, 0.0f, 0.5f));
+	group.add(matGlow.set("glow",               0.3f,  0.0f, 1.5f));
 }
 
 //==============================================================
@@ -486,6 +487,7 @@ void Flock3D::draw(){
 	particleShader.setUniform1f("uBrightness", matBrightness);
 	particleShader.setUniform1f("uSpecular",   matSpecular);
 	particleShader.setUniform1f("uAmbient",    matAmbient);
+	particleShader.setUniform1f("uGlow",       matGlow);
 	particleMesh.draw();
 	particleShader.end();
 
@@ -854,59 +856,69 @@ void Flock3D::loadShaderInline(){
 		}
 	)";
 
-	// Fragment: 把每个点 sprite 视为 hemisphere 表面
-	// gl_PointCoord 范围 0..1 → 把它当 sphere 的 (x,y)，由此重建 normal
-	// Lambert diffuse + 小高光 + 暗面 ambient 填充
-	// 整体保持 dim → flash（CPU 把 color → 白）自然能压过 shading
+	// Fragment: 着色 sphere（内 70%）+ 可调 halo（外 30%）
+	// gl_PointCoord 0..1 → 把它当 sphere 的 (x,y)，反算 hemisphere normal
+	// Lambert + 小高光，整体 dim；halo 在 sphere 外圈柔光发散
+	// Flash detection 让 flash 粒子跳过 shading，flat-white 突出
 	std::string frag = R"(
 		#version 150
 		uniform float uBrightness;
 		uniform float uSpecular;
 		uniform float uAmbient;
+		uniform float uGlow;          // halo 强度
 		in  vec4  vColor;
 		in  float vDepthFade;
 		out vec4 fragColor;
 
 		void main(){
-			// 把 point sprite 当 unit disc，反算 hemisphere normal
 			vec2 c = gl_PointCoord - vec2(0.5);
 			float d2 = dot(c, c);
-			if (d2 > 0.25) discard;
-
-			// 半径 0.5 的圆盘 → z = sqrt(0.25 - d²) * 2 → normal 单位向量
-			float z = sqrt(0.25 - d2) * 2.0;
-			vec3 N = normalize(vec3(c.x * 2.0, c.y * 2.0, z));
-
-			// 光源：上方偏左前（视图空间）
-			vec3 L = normalize(vec3(-0.4, -0.5, 0.7));
-			vec3 V = vec3(0.0, 0.0, 1.0);   // 视线方向
-			vec3 H = normalize(L + V);
-
-			// Lambert diffuse + ambient 填充
-			float NdotL = max(0.0, dot(N, L));
-			float diffuse = NdotL * (1.0 - uAmbient) + uAmbient;
-
-			// Phong-ish specular（点高光，紧致）
-			float NdotH = max(0.0, dot(N, H));
-			float spec = pow(NdotH, 28.0) * uSpecular;
-
-			// Flash detection：vColor 越接近白（flash 时 lerp 白），越用 flat 着色
-			// 让 flash 粒子干净突出，不被 shading 削弱
-			float vBright = (vColor.r + vColor.g + vColor.b) / 3.0;
-			float flashWeight = smoothstep(0.65, 0.95, vBright);
-			diffuse = mix(diffuse, 1.0, flashWeight);
-
-			// 边缘抗锯齿（disc 边）
+			if (d2 > 0.25) discard;            // 整个 sprite 边外丢
 			float d = sqrt(d2);
-			float edge = smoothstep(0.5, 0.46, d);
 
-			// 合成：基础色 × diffuse + 白色 spec
-			vec3 baseCol = vColor.rgb * vDepthFade * uBrightness;
-			vec3 finalCol = baseCol * diffuse + vec3(spec) * vDepthFade;
+			// Sphere 占内 70%（disc 半径 0.35）；halo 占 0.35..0.5
+			const float sphereR  = 0.35;
+			const float sphereR2 = sphereR * sphereR;
 
-			// alpha：边缘淡出，flash 时拉满
-			float a = vColor.a * edge * mix(0.85, 1.0, flashWeight);
-			fragColor = vec4(finalCol, a);
+			vec3  outCol = vec3(0.0);
+			float outA   = 0.0;
+
+			// ─── Sphere zone（d < 0.35）：Lambert + Spec 着色 ───
+			if (d2 <= sphereR2) {
+				float z = sqrt(sphereR2 - d2);
+				vec3 N = vec3(c.x, c.y, z) / sphereR;   // 单位法向
+
+				vec3 L = normalize(vec3(-0.4, -0.5, 0.7));
+				vec3 V = vec3(0.0, 0.0, 1.0);
+				vec3 H = normalize(L + V);
+
+				float NdotL = max(0.0, dot(N, L));
+				float diffuse = NdotL * (1.0 - uAmbient) + uAmbient;
+
+				float NdotH = max(0.0, dot(N, H));
+				float spec = pow(NdotH, 28.0) * uSpecular;
+
+				// Flash detect：颜色发白 → 跳过 shading（让 flash 跳出来）
+				float vBright = (vColor.r + vColor.g + vColor.b) / 3.0;
+				float flashWeight = smoothstep(0.65, 0.95, vBright);
+				diffuse = mix(diffuse, 1.0, flashWeight);
+
+				vec3 baseCol = vColor.rgb * vDepthFade * uBrightness;
+				outCol = baseCol * diffuse + vec3(spec) * vDepthFade;
+				outA   = vColor.a * mix(0.85, 1.0, flashWeight);
+			}
+
+			// ─── Halo zone（sphere 外）：柔光，二次衰减 ───
+			if (uGlow > 0.001) {
+				// 内边 sphereR → 强；外边 0.5 → 0；quadratic 衰减让形态柔和
+				float t = smoothstep(0.5, sphereR * 0.85, d);   // 0..1
+				float haloI = t * t * uGlow;
+				vec3 haloCol = vColor.rgb * vDepthFade * uBrightness * haloI;
+				outCol += haloCol;
+				outA = max(outA, haloI * vColor.a * 0.6);
+			}
+
+			fragColor = vec4(outCol, outA);
 		}
 	)";
 
