@@ -423,6 +423,21 @@ effective_len = base_len × (0.5 + audio_influence × sensitivity × 1.5)
 - 拖 GUI 到副屏 / 演出环境分离控制
 - 全屏 flock 时 GUI 不会盖住视觉
 
+## rp-34 — ImGui widget ID collision fix
+
+**Commit**: `git tag rp-34-imgui-id-fix`
+
+**Bug**: 改 wind vol 时 cluster drone vol 也跟着变，反之亦然。原因是
+ImGui 默认用 widget label 计算 widget ID。多个 ofParameter 同名
+（"vol"、"attack (ms)"、"resonance"）→ widget ID 碰撞 → 拖一个
+带动另一个。XML 持久化没事（ofParameter 实例独立），纯 ImGui 显示
+层 bug。
+
+**Fix**: `ImGuiHelpers.h` 里所有 widget helper 用 `ofParameter`
+实例的内存地址做 ID 命名空间（`ImGui::PushID((void*)&p)`）。每个
+ofParameter 地址唯一 → ID 唯一。display label 保持原状，drawImGui
+调用代码完全不动。
+
 ## rp-33 — 粒子软边 + 性能优化
 
 **Commit**: `git tag rp-33-aa-perf`
