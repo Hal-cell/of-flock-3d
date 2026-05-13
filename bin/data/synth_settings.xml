@@ -6,7 +6,7 @@
 	<voiceVol>0.7</voiceVol>
 	<reverbAmt>0.815</reverbAmt>
 	<rootFreq__Hz_>91.575</rootFreq__Hz_>
-	<scale>0</scale>
+	<scale>6</scale>
 	<eventVol>0.735</eventVol>
 	<decay__ms_>163.4</decay__ms_>
 	<hit_gain>0.5865</hit_gain>
@@ -55,4 +55,5 @@
 		<base_cutoff__Hz_>100</base_cutoff__Hz_>
 		<amp→cutoff>1</amp→cutoff>
 	</Wind>
+	<drone_glide__ms_>2080.68</drone_glide__ms_>
 </Synth>

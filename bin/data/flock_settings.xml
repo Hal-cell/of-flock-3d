@@ -11,16 +11,16 @@
 	<noise_amp>156</noise_amp>
 	<noise_scale>0.009082</noise_scale>
 	<noise_speed>0.24</noise_speed>
-	<vortex_amp>65.6836</vortex_amp>
+	<vortex_amp>200</vortex_amp>
 	<spiral_amp>0</spiral_amp>
-	<curl_amp>61.6836</curl_amp>
-	<attractor_amp>63</attractor_amp>
-	<repeller_amp>51</repeller_amp>
-	<flock_sep>1.09395</flock_sep>
-	<flock_coh>15.8758</flock_coh>
+	<curl_amp>186</curl_amp>
+	<attractor_amp>48</attractor_amp>
+	<repeller_amp>44</repeller_amp>
+	<flock_sep>2</flock_sep>
+	<flock_coh>12.4</flock_coh>
 	<coh_speed>0.181201</coh_speed>
 	<flock_nbrR>303.49</flock_nbrR>
-	<merge_dist>3.82902</merge_dist>
+	<merge_dist>12.505</merge_dist>
 	<spawn_rate>40000</spawn_rate>
 	<min_alive>0.89</min_alive>
 	<damping>0.95</damping>
