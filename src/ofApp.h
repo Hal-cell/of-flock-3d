@@ -2,7 +2,7 @@
 
 #include "ofMain.h"
 #include "ofxGui.h"        // ofxPanel 保留（仅用于 XML save/load 持久化，不渲染）
-#include "ofxImGui.h"      // 新 GUI 渲染
+#include "ofxImGui.h"      // GUI 渲染（运行在 guiWindow）
 #include "Flock3D.h"
 #include "Synth.h"
 
@@ -18,6 +18,12 @@ public:
 	// 音频回调（ofSoundStream 自动每 buffer 调用一次）
 	void audioOut(ofSoundBuffer& buffer) override;
 
+	// GUI window 的 draw event 回调（main.cpp 里订阅）
+	void drawGui(ofEventArgs& args);
+
+	// main.cpp 注入：第二个 OS 窗口的指针
+	std::shared_ptr<ofAppBaseWindow> guiWindow;
+
 private:
 	Flock3D flock;
 	Synth   synth;
@@ -30,12 +36,12 @@ private:
 	ofxPanel flockGui;
 	ofxPanel synthGui;
 
-	// 新 GUI（ofxImGui）
+	// ImGui — 在 drawGui() 第一次触发时初始化（保证 listener attach 到 gui window）
 	ofxImGui::Gui imgui;
+	bool imguiInitialized = false;
 	void applyImGuiTheme();
 
-	bool showGui   = true;
 	bool recording = false;
 	int  frameNum  = 0;
-	int  lastClusterCount = 0;   // HUD 显示
+	int  lastClusterCount = 0;
 };

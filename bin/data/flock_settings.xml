@@ -19,8 +19,8 @@
 	<flock_sep>2</flock_sep>
 	<flock_coh>12.4</flock_coh>
 	<coh_speed>0.181201</coh_speed>
-	<flock_nbrR>303.49</flock_nbrR>
-	<merge_dist>12.505</merge_dist>
+	<flock_nbrR>232.9</flock_nbrR>
+	<merge_dist>8.7</merge_dist>
 	<spawn_rate>40000</spawn_rate>
 	<min_alive>0.89</min_alive>
 	<damping>0.95</damping>

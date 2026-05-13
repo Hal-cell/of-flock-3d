@@ -1,20 +1,21 @@
 #include "ofApp.h"
 
-//--------------------------------------------------------------
+//==============================================================
+//  setup — 在 main window 的上下文里调用
+//==============================================================
 void ofApp::setup(){
 	ofSetFrameRate(60);
 	ofSetVerticalSync(true);
 	ofBackground(0);
 
 	// ─── Flock + Synth 参数 ───
-	// 用 ofxPanel 仅做 XML 持久化（绑定 ofParameterGroup → 提供 load/saveToFile）
 	flock.buildGui(flockParams);
 	flockGui.setup(flockParams);
 
 	synth.buildGui(synthParams);
 	synthGui.setup(synthParams);
 
-	// 自动加载上次的设置（必须在 flock.setup 之前，让 setup 用上恢复值）
+	// 自动加载上次的设置（在 flock.setup 之前，让 setup 用上恢复值）
 	if (ofFile::doesFileExist(ofToDataPath("flock_settings.xml"))) {
 		flockGui.loadFromFile("flock_settings.xml");
 		ofLogNotice() << "loaded flock_settings.xml";
@@ -25,10 +26,6 @@ void ofApp::setup(){
 	}
 
 	flock.setup(ofGetWidth(), ofGetHeight());
-
-	// ─── ImGui ───
-	imgui.setup();
-	applyImGuiTheme();
 
 	// ─── 音频引擎 ───
 	int sampleRate  = 44100;
@@ -48,12 +45,13 @@ void ofApp::setup(){
 	ofLogNotice() << "Audio: " << sampleRate << "Hz, buffer " << bufferSize
 	              << ", " << numChannels << "ch";
 
-	ofSetWindowTitle("of-flock-3d");
+	// 注意：ImGui 在 drawGui() 第一次触发时才 init（确保它绑定到 gui window 的 events）
 }
 
-//--------------------------------------------------------------
+//==============================================================
+//  ImGui theme
+//==============================================================
 void ofApp::applyImGuiTheme(){
-	// 暗色 + 圆角主题：低调、不抢视觉
 	ImGuiStyle& style = ImGui::GetStyle();
 	style.WindowRounding    = 8.0f;
 	style.FrameRounding     = 4.0f;
@@ -68,7 +66,7 @@ void ofApp::applyImGuiTheme(){
 	style.WindowTitleAlign  = ImVec2(0.5f, 0.5f);
 
 	ImVec4* c = style.Colors;
-	c[ImGuiCol_WindowBg]            = ImVec4(0.07f, 0.08f, 0.10f, 0.92f);
+	c[ImGuiCol_WindowBg]            = ImVec4(0.07f, 0.08f, 0.10f, 1.00f);  // 独立 OS 窗口 → 不透明
 	c[ImGuiCol_TitleBg]             = ImVec4(0.10f, 0.12f, 0.16f, 1.00f);
 	c[ImGuiCol_TitleBgActive]       = ImVec4(0.20f, 0.30f, 0.55f, 1.00f);
 	c[ImGuiCol_TitleBgCollapsed]    = ImVec4(0.10f, 0.12f, 0.16f, 0.80f);
@@ -94,7 +92,9 @@ void ofApp::applyImGuiTheme(){
 	c[ImGuiCol_TextDisabled]        = ImVec4(0.55f, 0.60f, 0.70f, 1.00f);
 }
 
-//--------------------------------------------------------------
+//==============================================================
+//  exit
+//==============================================================
 void ofApp::exit(){
 	soundStream.close();
 	flockGui.saveToFile("flock_settings.xml");
@@ -102,20 +102,22 @@ void ofApp::exit(){
 	ofLogNotice() << "saved flock_settings.xml + synth_settings.xml";
 }
 
-//--------------------------------------------------------------
+//==============================================================
+//  update — 主线程（main window 上下文）
+//==============================================================
 void ofApp::update(){
 	flock.update();
 
-	// Audio → Visual：把音频活跃度推给 flock 用于 trail 长度调节
+	// Audio → Visual：音频活跃度 → trail 长度
 	flock.setAudioInfluence(synth.getAudioInfluenceForTail());
 
-	// Visual → Audio：tail 长度归一化 → FM idxDecay 正相关调制
+	// Visual → Audio：tail 长度 → FM idxDecay
 	synth.setTailInfluence(flock.getCurrentTailNormalized());
 
 	// Field amp 总和 → 风声音量
 	synth.setFieldAmpTotal(flock.getFieldAmpTotal());
 
-	// Cluster 检测 → cluster drone voice 池
+	// Cluster 检测 → drone voice 池
 	auto clusters = flock.getClusters(Synth::getMaxDroneVoices());
 	synth.updateClusterVoices(clusters, flock.getWorldRadius());
 	lastClusterCount = (int)clusters.size();
@@ -126,7 +128,9 @@ void ofApp::update(){
 	}
 }
 
-//--------------------------------------------------------------
+//==============================================================
+//  draw — main window：只画 flock
+//==============================================================
 void ofApp::draw(){
 	flock.draw();
 
@@ -138,66 +142,7 @@ void ofApp::draw(){
 		frameNum++;
 	}
 
-	if (showGui) {
-		// ─── ImGui 主面板 ───
-		imgui.begin();
-
-		ImGui::SetNextWindowPos(ImVec2(16, 16), ImGuiCond_FirstUseEver);
-		ImGui::SetNextWindowSize(ImVec2(380, ofGetHeight() - 32), ImGuiCond_FirstUseEver);
-
-		if (ImGui::Begin("of-flock-3d", nullptr, ImGuiWindowFlags_NoCollapse)) {
-			// 顶部 HUD：cluster + drone 计数
-			ImGui::TextColored(ImVec4(0.6f, 0.85f, 1.0f, 1.0f),
-			                   "clusters %d   drones %d/%d",
-			                   lastClusterCount,
-			                   synth.getActiveDroneCount(),
-			                   Synth::getMaxDroneVoices());
-			ImGui::SameLine();
-			ImGui::TextDisabled("  fps %.1f", ofGetFrameRate());
-			ImGui::Separator();
-
-			if (ImGui::BeginTabBar("MainTabs")) {
-				if (ImGui::BeginTabItem("Visual")) {
-					ImGui::BeginChild("VisualScroll", ImVec2(0, 0), false);
-					flock.drawImGui();
-					ImGui::EndChild();
-					ImGui::EndTabItem();
-				}
-				if (ImGui::BeginTabItem("Synth")) {
-					ImGui::BeginChild("SynthScroll", ImVec2(0, 0), false);
-					synth.drawImGui();
-					ImGui::EndChild();
-					ImGui::EndTabItem();
-				}
-				if (ImGui::BeginTabItem("Help")) {
-					ImGui::TextDisabled("Keys");
-					ImGui::BulletText("h : toggle GUI");
-					ImGui::BulletText("f : fullscreen");
-					ImGui::BulletText("s : snapshot (PNG)");
-					ImGui::BulletText("r : record PNG sequence");
-					ImGui::BulletText("space : reset flock");
-					ImGui::BulletText("mouse drag : orbit camera");
-					ImGui::BulletText("scroll : zoom");
-					ImGui::Separator();
-					ImGui::TextDisabled("Status");
-					ImGui::Text("recording : %s", recording ? "ON" : "OFF");
-					ImGui::Text("audio influence (→ tail) : %.2f",
-					            synth.getAudioInfluenceForTail());
-					ImGui::Text("tail (→ FM idxDecay) : %.2f",
-					            flock.getCurrentTailNormalized());
-					ImGui::Text("field amp total (→ wind) : %.2f",
-					            flock.getFieldAmpTotal());
-					ImGui::EndTabItem();
-				}
-				ImGui::EndTabBar();
-			}
-		}
-		ImGui::End();
-
-		imgui.end();
-	}
-
-	// 录制指示器（始终显示，独立于 GUI）
+	// 录制指示器
 	if (recording) {
 		ofSetColor(255, 0, 0);
 		ofDrawCircle(ofGetWidth() - 30, 30, 8);
@@ -206,19 +151,95 @@ void ofApp::draw(){
 	}
 }
 
-//--------------------------------------------------------------
+//==============================================================
+//  drawGui — gui window 的 draw 回调（独立 OS 窗口）
+//==============================================================
+void ofApp::drawGui(ofEventArgs&){
+	// 第一次触发时初始化 ImGui — 此时正处于 gui window 的上下文，
+	// engine.setup() 内部的 ofAddListener(ofEvents()...) 会绑定到这个窗口的 events
+	if (!imguiInitialized) {
+		imgui.setup();
+		applyImGuiTheme();
+		imguiInitialized = true;
+	}
+
+	ofBackground(15, 18, 24);   // GUI 窗口背景（暗灰蓝）
+
+	imgui.begin();
+
+	// 让 ImGui 主面板占满整个 gui window
+	ImGui::SetNextWindowPos(ImVec2(0, 0));
+	ImGui::SetNextWindowSize(ImVec2((float)ofGetWidth(), (float)ofGetHeight()));
+
+	ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar |
+	                         ImGuiWindowFlags_NoResize |
+	                         ImGuiWindowFlags_NoMove |
+	                         ImGuiWindowFlags_NoCollapse |
+	                         ImGuiWindowFlags_NoBringToFrontOnFocus;
+
+	if (ImGui::Begin("of-flock-3d", nullptr, flags)) {
+		// 顶部 HUD
+		ImGui::TextColored(ImVec4(0.6f, 0.85f, 1.0f, 1.0f),
+		                   "clusters %d   drones %d/%d",
+		                   lastClusterCount,
+		                   synth.getActiveDroneCount(),
+		                   Synth::getMaxDroneVoices());
+		ImGui::SameLine();
+		ImGui::TextDisabled("  fps %.1f", ofGetFrameRate());
+		ImGui::Separator();
+
+		if (ImGui::BeginTabBar("MainTabs")) {
+			if (ImGui::BeginTabItem("Visual")) {
+				ImGui::BeginChild("VisualScroll", ImVec2(0, 0), false);
+				flock.drawImGui();
+				ImGui::EndChild();
+				ImGui::EndTabItem();
+			}
+			if (ImGui::BeginTabItem("Synth")) {
+				ImGui::BeginChild("SynthScroll", ImVec2(0, 0), false);
+				synth.drawImGui();
+				ImGui::EndChild();
+				ImGui::EndTabItem();
+			}
+			if (ImGui::BeginTabItem("Help")) {
+				ImGui::TextDisabled("Keys (focus main window)");
+				ImGui::BulletText("f : fullscreen");
+				ImGui::BulletText("s : snapshot (PNG)");
+				ImGui::BulletText("r : record PNG sequence");
+				ImGui::BulletText("space : reset flock");
+				ImGui::BulletText("mouse drag : orbit camera");
+				ImGui::BulletText("scroll : zoom");
+				ImGui::Separator();
+				ImGui::TextDisabled("Status");
+				ImGui::Text("recording : %s", recording ? "ON" : "OFF");
+				ImGui::Text("audio influence (→ tail) : %.2f",
+				            synth.getAudioInfluenceForTail());
+				ImGui::Text("tail (→ FM idxDecay) : %.2f",
+				            flock.getCurrentTailNormalized());
+				ImGui::Text("field amp total (→ wind) : %.2f",
+				            flock.getFieldAmpTotal());
+				ImGui::EndTabItem();
+			}
+			ImGui::EndTabBar();
+		}
+	}
+	ImGui::End();
+
+	imgui.end();
+}
+
+//==============================================================
+//  audio
+//==============================================================
 void ofApp::audioOut(ofSoundBuffer& buffer){
-	// 音频线程回调（每 buffer 一次，约 11ms @ 44.1kHz/512）
 	synth.audioOut(buffer);
 }
 
-//--------------------------------------------------------------
+//==============================================================
+//  keys — 主窗口键盘（不再有 'h' 切换 GUI，因为 GUI 是独立窗口）
+//==============================================================
 void ofApp::keyPressed(int key){
-	// ImGui 在抢键盘焦点时跳过 — 避免和 ImGui input 冲突
-	if (ImGui::GetIO().WantCaptureKeyboard) return;
-
 	switch (key) {
-		case 'h': case 'H': showGui = !showGui; break;
 		case 'f': case 'F': ofToggleFullscreen(); break;
 		case 's': case 'S': {
 			ofImage img;
@@ -243,7 +264,7 @@ void ofApp::keyPressed(int key){
 	}
 }
 
-//--------------------------------------------------------------
+//==============================================================
 void ofApp::windowResized(int w, int h){
 	flock.setup(w, h);
 }

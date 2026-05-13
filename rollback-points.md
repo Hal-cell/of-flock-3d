@@ -392,3 +392,33 @@ effective_len = base_len × (0.5 + audio_influence × sensitivity × 1.5)
 - 加 thickness（geometry shader / quad-billboard）让线条更"实"
 - color gradient（沿 trail 改变颜色，eg field 类型染色）
 - 加 velocity-vector display 调试用
+
+## rp-31 — ofxImGui GUI（单窗口 tabbed）
+
+**Commit**: `git tag rp-31-imgui-gui`
+
+**What changed**:
+- GUI 从 ofxGui 迁到 ofxImGui — 单 panel + tabbed (Visual / Synth / Help) + 暗蓝圆角主题
+- 折叠 sections（Flock 8 组 / Synth 6 组）
+- Scale 选择改成命名下拉框（12 个 scale）
+- ofxPanel 保留隐藏，只做 XML save/load 持久化
+- 新文件 `src/ImGuiHelpers.h`：ofParameter ↔ ImGui widget 桥接器
+
+**Local addon patches** (不在 repo)：
+- `imconfig.h` 加 `#include "ofConstants.h"`
+- `BaseEngine.cpp` 加 `#include "ofUtils.h"`
+
+## rp-32 — Dual-window GUI
+
+**Commit**: `git tag rp-32-dual-window`
+
+**What changed vs rp-31**:
+- GUI 拆到独立 OS 窗口（440×900）— 主窗口纯 flock 渲染
+- `main.cpp` 创建两个 `ofGLFWWindow`，gui window 用 `shareContextWith` 共享 GL
+- `ofApp::drawGui(ofEventArgs&)` 订阅 gui window 的 draw 事件
+- ImGui 在 drawGui 第一次触发时初始化（确保 listener 绑到 gui window 的 events）
+- 主窗口键盘移除 `h`（不再需要切换 GUI）
+
+**Use this checkpoint to**:
+- 拖 GUI 到副屏 / 演出环境分离控制
+- 全屏 flock 时 GUI 不会盖住视觉
