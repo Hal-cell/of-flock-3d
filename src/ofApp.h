@@ -7,6 +7,7 @@
 #include "Synth.h"
 #include "MorphologyConductor.h"
 #include "Synchresis.h"
+#include "Score.h"
 
 class ofApp : public ofBaseApp {
 public:
@@ -31,6 +32,7 @@ private:
 	Synth   synth;
 	MorphologyConductor conductor;
 	Synchresis          synchresis;
+	ScorePlayer         scorePlayer;
 
 	ofSoundStream soundStream;
 
@@ -39,10 +41,12 @@ private:
 	ofParameterGroup synthParams;
 	ofParameterGroup morphologyParams;
 	ofParameterGroup synchresisParams;
+	ofParameterGroup scoreParams;
 	ofxPanel flockGui;
 	ofxPanel synthGui;
 	ofxPanel morphologyGui;
 	ofxPanel synchresisGui;
+	ofxPanel scoreGui;
 
 	// ImGui — 在 drawGui() 第一次触发时初始化（保证 listener attach 到 gui window）
 	ofxImGui::Gui imgui;

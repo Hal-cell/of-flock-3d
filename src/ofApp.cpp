@@ -21,6 +21,10 @@ void ofApp::setup(){
 	synchresis.buildGui(synchresisParams);
 	synchresisGui.setup(synchresisParams);
 
+	scorePlayer.setup();
+	scorePlayer.buildGui(scoreParams);
+	scoreGui.setup(scoreParams);
+
 	// 自动加载上次的设置（在 flock.setup 之前，让 setup 用上恢复值）
 	if (ofFile::doesFileExist(ofToDataPath("flock_settings.xml"))) {
 		flockGui.loadFromFile("flock_settings.xml");
@@ -37,6 +41,10 @@ void ofApp::setup(){
 	if (ofFile::doesFileExist(ofToDataPath("synchresis_settings.xml"))) {
 		synchresisGui.loadFromFile("synchresis_settings.xml");
 		ofLogNotice() << "loaded synchresis_settings.xml";
+	}
+	if (ofFile::doesFileExist(ofToDataPath("score_settings.xml"))) {
+		scoreGui.loadFromFile("score_settings.xml");
+		ofLogNotice() << "loaded score_settings.xml";
 	}
 
 	flock.setup(ofGetWidth(), ofGetHeight());
@@ -117,7 +125,8 @@ void ofApp::exit(){
 	synthGui.saveToFile("synth_settings.xml");
 	morphologyGui.saveToFile("morphology_settings.xml");
 	synchresisGui.saveToFile("synchresis_settings.xml");
-	ofLogNotice() << "saved flock/synth/morphology/synchresis _settings.xml";
+	scoreGui.saveToFile("score_settings.xml");
+	ofLogNotice() << "saved flock/synth/morphology/synchresis/score _settings.xml";
 }
 
 //==============================================================
@@ -125,6 +134,9 @@ void ofApp::exit(){
 //==============================================================
 void ofApp::update(){
 	float dt = ofGetLastFrameTime();
+
+	// 0. Score Player — 如果在播，覆写 conductor 的 mode/curve/etc 参数
+	scorePlayer.update(dt, conductor);
 
 	// 1. Morphology Conductor — 产生目标轨迹
 	conductor.update(dt);
@@ -239,6 +251,13 @@ void ofApp::drawGui(ofEventArgs&){
 			                   synth.getAudioEnergyMeasured(),
 			                   flock.getVisualEnergyMeasured());
 		}
+		// HUD 第四行：score 状态（仅 playing 时显示）
+		if (scorePlayer.isPlaying()) {
+			ImGui::TextColored(ImVec4(0.95f, 0.7f, 0.85f, 1.0f),
+			                   "score:      ▶ %s   %.1fs",
+			                   scorePlayer.currentScoreName().c_str(),
+			                   scorePlayer.elapsed());
+		}
 		ImGui::Separator();
 
 		if (ImGui::BeginTabBar("MainTabs")) {
@@ -247,6 +266,18 @@ void ofApp::drawGui(ofEventArgs&){
 				conductor.drawImGui();
 				ImGui::Spacing();
 				synchresis.drawImGui();
+				ImGui::Spacing();
+				scorePlayer.drawImGui();
+				// Play button needs conductor ref → 在 ofApp 这里直接渲染
+				if (!scorePlayer.isPlaying()) {
+					if (ImGui::Button("▶ Play Score")) {
+						scorePlayer.play(conductor);
+					}
+				} else {
+					if (ImGui::Button("■ Stop Score")) {
+						scorePlayer.stop();
+					}
+				}
 				ImGui::EndChild();
 				ImGui::EndTabItem();
 			}

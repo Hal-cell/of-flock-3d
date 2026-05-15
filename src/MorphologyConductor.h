@@ -57,8 +57,12 @@ public:
 	// 每帧更新（main 线程）
 	void update(float dt);
 
-	// 重新触发当前 phase（从 0 开始）
+	// 重新触发当前 phase（从 0 开始）。用户显式重启 = 干净清 bridge
 	void trigger();
+
+	// 轻量重启 phase 但保留 bridgeOffset（给 ScorePlayer 切换 event 用，
+	// 让 mode 之间靠 bridge 平滑过渡）
+	void softRestart();
 
 	// 当前归一化能量值 [0..1]，baseline 0.5
 	float value() const { return currentValue; }

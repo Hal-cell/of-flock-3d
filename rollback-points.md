@@ -423,6 +423,53 @@ effective_len = base_len × (0.5 + audio_influence × sensitivity × 1.5)
 - 拖 GUI 到副屏 / 演出环境分离控制
 - 全屏 flock 时 GUI 不会盖住视觉
 
+## rp-39 — Score Mode（论文 Figure 2 一键演奏）
+
+**Commit**: `git tag rp-39-score-mode`
+
+**背景**：原 conductor 只能手动选 mode。要复现论文 Figure 2 的完整作品
+（ascent → osc+ascent → descent 30秒一气呵成），用户得手动按时间切换。
+ScorePlayer 把这个序列**预设化** —— 选 score 一键播放，自动按时间切 events。
+
+**新文件**：
+- `src/Score.h/cpp` — Score 数据结构 + ScorePlayer 类
+
+**Score 结构**：
+```cpp
+struct ScoreEvent {
+    float startTime, duration;
+    int   mode, curveShape;
+    float oscRate, oscDepth;
+};
+struct Score {
+    std::string name;
+    std::vector<ScoreEvent> events;
+    float totalDuration;
+};
+```
+
+**内置 3 个 demo score**：
+| Score | 时长 | 内容 |
+|---|---|---|
+| **Figure 2 Arc** | 30s | ascent 8s → ascent_osc 12s → descent 10s |
+| **Storm Cycle** | 25s | ascent 3s → oscillation 12s → descent_osc 10s |
+| **Quiet Breath** | 45s | 长慢吸气 → 高点呼吸 → 长慢呼气 |
+
+**MorphologyConductor 新增** `softRestart()` 方法 — 只重置 phase，**保留
+bridgeOffset** 让 score event 切换走 rp-35 的平滑过渡机制。
+
+**ofApp 接入**：
+- update() 头部 `scorePlayer.update(dt, conductor)`（在 conductor.update 之前）
+- 写 conductor.mode / curveShape / phaseDuration / oscRate / oscDepth
+- 然后 conductor.update 检测 mode change → 捕获 bridge → 平滑过渡
+- HUD 顶部多一行显示 "score: ▶ <name> X.Xs"
+- Morphology tab 有 Score Playback section（下拉选 score + Play/Stop 按钮）
+- 持久化：`score_settings.xml`（记 scoreIdx + looping）
+
+**典型用法**：
+- 选 "Figure 2 Arc"，开 loop → 系统永远循环播放论文经典曲线
+- 配 conductorAmount=1 (Flock + Synth)，听到 / 看到完整声画 arc
+
 ## rp-38 — 视觉 EnergyStage 补齐（声画响应对等）
 
 **Commit**: `git tag rp-38-visual-stages`

@@ -33,6 +33,13 @@ void MorphologyConductor::trigger() {
 	bridgeOffset = 0.0f;   // 用户显式 trigger 想要干净重启，不要 bridge
 }
 
+void MorphologyConductor::softRestart() {
+	// 只重置 phase，保留 bridgeOffset → 配合 mode 切换捕获，平滑过渡到新 event
+	elapsedTime = 0.0f;
+	currentPhase = 0.0f;
+	// 不动 bridgeOffset
+}
+
 void MorphologyConductor::update(float dt) {
 	elapsedTime += dt;
 
