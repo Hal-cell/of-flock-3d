@@ -81,11 +81,11 @@ void Synth::buildGui(ofParameterGroup& group){
 	// Wave folder（西海岸合成派）：sin(x · drive) 形式，加谐波不加幅度
 	// conductor 上升时也会自动加深（× audioCondScalar），让 spectrum 跟能量轨迹绑定
 	clusterDroneGroup.add(clusterDroneFold.set("fold",        0.0f,   0.0f,  1.0f));
-	// Chord Progression（rp-43）：energy 激增→平静时切换和弦
+	// Chord Progression（rp-43）：audio energy 激增→平静时切换和弦
 	clusterDroneGroup.add(enableChordProgression.set("chord progression", false));
-	clusterDroneGroup.add(chordChangeHigh.set("chord trigger high", 0.7f, 0.5f, 1.0f));
-	clusterDroneGroup.add(chordChangeLow.set("chord trigger low",  0.3f, 0.0f, 0.5f));
-	clusterDroneGroup.add(chordMinIntervalSec.set("chord min interval (s)", 5.0f, 0.5f, 30.0f));
+	clusterDroneGroup.add(chordChangeHigh.set("chord trigger high", 0.55f, 0.3f, 1.0f));
+	clusterDroneGroup.add(chordChangeLow.set("chord trigger low",  0.25f, 0.0f, 0.5f));
+	clusterDroneGroup.add(chordMinIntervalSec.set("chord min interval (s)", 4.0f, 0.5f, 30.0f));
 	group.add(clusterDroneGroup);
 
 	// ─── Wind 子组（持续滤波噪声；field amp → cutoff）───
@@ -154,13 +154,22 @@ void Synth::drawImGui(){
 		ImGui::TextDisabled("fold 加深 → 谐波丰富但幅度不变；conductor 高时自动加深");
 
 		ImGui::Separator();
-		ImGui::TextDisabled("Chord Progression");
+		ImGui::TextDisabled("Chord Progression (uses audio energy)");
 		ig::check(enableChordProgression);
 		ig::slider(chordChangeHigh);
 		ig::slider(chordChangeLow);
 		ig::slider(chordMinIntervalSec, "%.1f s");
-		ImGui::TextColored(ImVec4(0.85f, 0.7f, 0.4f, 1.0f),
-		                   "current chord: %d / 4", currentChordIdx + 1);
+
+		// 状态 + 手动 trigger
+		float ae = a_audioEnergyMeasured.load();
+		ImGui::Text("audio energy: %.2f   chord: %d/4   peak state: %s",
+		            ae, currentChordIdx + 1,
+		            peakWasAbove ? "WAITING for calm" : "watching for peak");
+		ImGui::Text("since last change: %.1fs / %.1fs",
+		            secSinceLastChord, chordMinIntervalSec.get());
+		if (ImGui::Button("Trigger chord change now")) {
+			chordManualTriggerPending.store(true);
+		}
 	}
 
 	if (ig::section("Wind")) {
@@ -380,21 +389,31 @@ void Synth::updateClusterVoices(const std::vector<Flock3D::Cluster>& clusters, f
 	a_worldRadius.store(wr);
 
 	// ─── Chord Progression: peak-then-calm 检测 → 切换 chord（rp-43）───
-	// energy 升过 chordChangeHigh → 进入"激增"；再落到 chordChangeLow → 触发切换
-	// chordMinIntervalSec 防过密
+	// 能量源：audio energy 实测（不是 conductor）—— 即使 FREE mode / conductor
+	// amount=0，只要实际声音在动 chord 还能切。
+	// chordMinIntervalSec 防过密。
 	float dt = ofGetLastFrameTime();
 	secSinceLastChord += dt;
-	if (enableChordProgression.get()) {
-		float energyForChord = a_conductorValue.load();   // 直接读 conductor，不要 conductor amount 调制
-		if (!peakWasAbove && energyForChord > chordChangeHigh.get()) {
-			peakWasAbove = true;
-		} else if (peakWasAbove
-		           && energyForChord < chordChangeLow.get()
-		           && secSinceLastChord >= chordMinIntervalSec.get())
-		{
-			// Peak-then-calm 触发 → 推进 chord
+	bool manualTrigger = chordManualTriggerPending.exchange(false);
+
+	if (enableChordProgression.get() || manualTrigger) {
+		float energyForChord = a_audioEnergyMeasured.load();   // 实测 audio energy
+		bool autoTrigger = false;
+		if (enableChordProgression.get()) {
+			if (!peakWasAbove && energyForChord > chordChangeHigh.get()) {
+				peakWasAbove = true;
+			} else if (peakWasAbove
+			           && energyForChord < chordChangeLow.get()
+			           && secSinceLastChord >= chordMinIntervalSec.get())
+			{
+				autoTrigger = true;
+				peakWasAbove = false;
+			}
+		}
+
+		if (autoTrigger || manualTrigger) {
+			// 推进 chord
 			currentChordIdx = (currentChordIdx + 1) % 4;
-			peakWasAbove = false;
 			secSinceLastChord = 0.0f;
 
 			// 把所有活 voice 的 targetFreq 更新到新 chord（glideMs 平滑过渡）
@@ -406,7 +425,6 @@ void Synth::updateClusterVoices(const std::vector<Flock3D::Cluster>& clusters, f
 				int   newSemi  = (int)roundf(12.0f * log2f(newFreq / rootFreq));
 				droneTracking[i].semitone = newSemi;
 				droneVoices[i].targetFreq.store(newFreq);
-				// currentFreq 不重置 → 音频线程 glideCoef 平滑
 			}
 		}
 	}
@@ -611,8 +629,8 @@ void Synth::audioOut(ofSoundBuffer& buffer){
 	static const EnergyStage stageEvtVol  {0.0f, 1.0f, 3};  // sigmoid，全程；event vol 60%..100%
 	// (FM modIndex stage 在 triggerCollision 使用)
 
-	// Event vol 微弱 staging（60% floor → 100%）：低能段 event 稍轻不消失
-	float evtVolStaged = stageEvtVol.blendRange(energy, eventVol.get() * 0.6f,
+	// Event vol 弱 staging（35% floor → 100%）：低能段 event 明显轻一些但不消失
+	float evtVolStaged = stageEvtVol.blendRange(energy, eventVol.get() * 0.35f,
 	                                            eventVol.get(), condAmt);
 
 	// ─── 预算 SVF cutoff / resonance 系数（per-buffer，每 sample 不变）───
@@ -826,9 +844,13 @@ void Synth::audioOut(ofSoundBuffer& buffer){
 			float highR = nR - windSvfLowR - wndQ * windSvfBandR;
 			windSvfBandR += wndFc * highR;
 
+			// per-sample 平滑 wndVol（避免 conductor descent 时 buffer-rate 阶跃失真）
+			// coef ~0.001 → 半衰约 700 samples ≈ 16ms @ 44.1kHz
+			windVolSmooth += (wndVol - windVolSmooth) * 0.001f;
+
 			// 音量独立（不被 field amp 影响）
-			float wL = windSvfLowL * wndVol;
-			float wR = windSvfLowR * wndVol;
+			float wL = windSvfLowL * windVolSmooth;
+			float wR = windSvfLowR * windVolSmooth;
 
 			left  += wL;
 			right += wR;

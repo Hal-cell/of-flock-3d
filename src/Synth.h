@@ -127,6 +127,8 @@ private:
 	float windSvfLowL = 0, windSvfBandL = 0;
 	float windSvfLowR = 0, windSvfBandR = 0;
 	float windLfoPhase = 0.0f;
+	// per-sample wndVol 平滑（避免 conductor descent 时 buffer-rate 阶跃 → 卡壳/失真）
+	float windVolSmooth = 0.4f;
 
 	// ─── Cluster Drone 参数 ───
 	ofParameterGroup   clusterDroneGroup;
@@ -148,6 +150,7 @@ private:
 	int   currentChordIdx = 0;
 	bool  peakWasAbove    = false;
 	float secSinceLastChord = 100.0f;       // 启动时允许立刻切（如果触发）
+	std::atomic<bool> chordManualTriggerPending{false};   // 用户按"trigger"按钮置 true
 
 	// 4 个 chord template，每个 = 4 voices 的 semitone 偏移（root 加几个半音）
 	// 设计原则：相邻 chord 之间每个 voice 仅移动小度数，自然 voice leading

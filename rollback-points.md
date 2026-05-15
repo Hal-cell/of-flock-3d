@@ -423,6 +423,33 @@ effective_len = base_len × (0.5 + audio_influence × sensitivity × 1.5)
 - 拖 GUI 到副屏 / 演出环境分离控制
 - 全屏 flock 时 GUI 不会盖住视觉
 
+## rp-44 — Event vol 再压低 / Wind 失真修 / Chord 触发改 audio energy
+
+**Commit**: `git tag rp-44-three-fixes`
+
+**1. Event vol floor 0.6 → 0.35**
+   - 用户希望低能段事件再轻一些
+   - `evtVolStaged = blendRange(energy, eventVol × 0.35, eventVol, ca)`
+
+**2. Wind descent 失真**
+   - 根因：wndVol 是 per-buffer 计算（512 samples 一次），conductor descent
+     时每 buffer 阶跃下降 → buffer 边界产生 ~86Hz aliased 杂音 → "卡壳"
+   - 修：per-sample 1-pole 平滑 `windVolSmooth += (target - smooth) × 0.001`
+     时常数 ≈ 16ms @ 44.1kHz → 阶跃被涂抹，听感平滑
+   - 新加 audio-thread-local `float windVolSmooth = 0.4f` 在 Synth.h
+
+**3. Chord 不触发**
+   - 根因：之前用 `a_conductorValue.load()` 作触发源 — 用户在 FREE mode /
+     conductor amount=0 时这个值永远 0.5，永远跨不过 0.7 阈值
+   - 修：触发源换成 `a_audioEnergyMeasured.load()` —— 实际播放的 audio
+     能量，无论 conductor mode 都在变
+   - 阈值默认改：high 0.7→0.55 / low 0.3→0.25 / interval 5s→4s
+   - 加**手动 trigger 按钮**（ImGui "Trigger chord change now"）
+   - GUI 实时显示：current audio energy / chord idx / peak state /
+     since last change → 用户能直接看到为什么没触发
+
+新加 atomic `chordManualTriggerPending` (Synth.h)。
+
 ## rp-43 — Drone Chord Progression（peak→calm 触发，voice-leading 衔接）
 
 **Commit**: `git tag rp-43-chord-progression`
