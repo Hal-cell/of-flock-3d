@@ -612,15 +612,28 @@ void Synth::audioOut(ofSoundBuffer& buffer){
 	float wndLfoIncr = ofClamp(windLfoRate.get(), 0.0f, 10.0f) / sampleRate;
 	float wndLfoD = windLfoDepth;
 
+	// per-sample 平滑目标（per-buffer 常量，每 sample 渐进逼近）
+	// 解决 conductor 能量突变时各值阶跃 → 11ms buffer 边界 click/distortion
+	// stageDroneV: drone 在能量 0.3..0.7 段渐入（sigmoid，中段乐器）
+	float cdrVolTarget    = stageDroneV.blend(energy, clusterDroneVol.get(), condAmt);
+	float svfFcTarget     = svfFc;       // 已 clamp
+	float foldDriveTarget = foldDrive;
+	float wndVolTarget    = wndVol;
+
 	for (int i = 0; i < n; i++) {
 		float left = 0, right = 0;
+
+		// 每 sample 渐进（1-pole）；coef 0.001 → tau ≈ 16ms
+		cdrVolSmooth    += (cdrVolTarget    - cdrVolSmooth)    * 0.001f;
+		svfFcSmooth     += (svfFcTarget     - svfFcSmooth)     * 0.001f;
+		foldDriveSmooth += (foldDriveTarget - foldDriveSmooth) * 0.001f;
+		windVolSmooth   += (wndVolTarget    - windVolSmooth)   * 0.001f;
 
 		// ───────────────────────────────
 		// A. Cluster Drone — 多声部，每 voice = 3 detuned saw + SVF lowpass
 		// ───────────────────────────────
 		{
-			// stageDroneV: drone 在能量 0.3..0.7 段渐入（sigmoid，中段乐器）
-			float cdrVol = stageDroneV.blend(energy, clusterDroneVol.get(), condAmt);
+			float cdrVol = cdrVolSmooth;
 			float cdrSumL = 0, cdrSumR = 0;
 			for (int v = 0; v < NUM_DRONE_VOICES; v++) {
 				auto& dv = droneVoices[v];
@@ -658,9 +671,10 @@ void Synth::audioOut(ofSoundBuffer& buffer){
 				rawSample *= (1.0f / 3.0f);   // 3 saws 归一化
 
 				// SVF state-variable lowpass（per-voice 独立滤波）
-				dv.svfLow  += svfFc * dv.svfBand;
+				// 用 svfFcSmooth（per-sample smoothed）避免 cutoff 阶跃 → click
+				dv.svfLow  += svfFcSmooth * dv.svfBand;
 				float svfHigh = rawSample - dv.svfLow - svfQ * dv.svfBand;
-				dv.svfBand += svfFc * svfHigh;
+				dv.svfBand += svfFcSmooth * svfHigh;
 				float filtered = dv.svfLow;
 
 				float sample = filtered * dv.currentVol;
@@ -675,9 +689,10 @@ void Synth::audioOut(ofSoundBuffer& buffer){
 
 			// Wave folder：sin(x · drive) 加密谐波（西海岸合成）
 			// 仅当 effFold > 0 才折，否则直通省 sinf 开销
+			// 用 foldDriveSmooth 避免 drive 阶跃产生的瞬时金属化爆裂
 			if (foldActive) {
-				cdrSumL = sinf(cdrSumL * foldDrive);
-				cdrSumR = sinf(cdrSumR * foldDrive);
+				cdrSumL = sinf(cdrSumL * foldDriveSmooth);
+				cdrSumR = sinf(cdrSumR * foldDriveSmooth);
 			}
 
 			left  += cdrSumL;
@@ -770,9 +785,9 @@ void Synth::audioOut(ofSoundBuffer& buffer){
 			float highR = nR - windSvfLowR - wndQ * windSvfBandR;
 			windSvfBandR += wndFc * highR;
 
-			// 音量独立（不被 field amp 影响）
-			float wL = windSvfLowL * wndVol;
-			float wR = windSvfLowR * wndVol;
+			// 音量独立（不被 field amp 影响）；用 windVolSmooth 防 buffer 阶跃 click
+			float wL = windSvfLowL * windVolSmooth;
+			float wR = windSvfLowR * windVolSmooth;
 
 			left  += wL;
 			right += wR;

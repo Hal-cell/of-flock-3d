@@ -128,6 +128,13 @@ private:
 	float windSvfLowR = 0, windSvfBandR = 0;
 	float windLfoPhase = 0.0f;
 
+	// per-sample 平滑（避免 conductor 能量突变时 buffer-rate 阶跃 → click/distortion）
+	// coef 0.001 → tau ≈ 16ms @ 44.1kHz，听感无 zipper noise
+	float windVolSmooth   = 0.4f;
+	float cdrVolSmooth    = 0.5f;
+	float svfFcSmooth     = 0.05f;
+	float foldDriveSmooth = 1.0f;
+
 	// ─── Cluster Drone 参数 ───
 	ofParameterGroup   clusterDroneGroup;
 	ofParameter<float> clusterDroneVol;     // 总音量
