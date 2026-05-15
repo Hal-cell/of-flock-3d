@@ -218,20 +218,9 @@ void Synth::triggerCollision(const Flock3D::CollisionEvent& ev){
 	// ─── 主线程预计算 FM 参数 ───
 	float nyquist = sampleRate * 0.45f;
 
-	// fmRatio: GUI float → snap 到最近 0.5 倍数
+	// fmRatio: GUI float → snap 到最近 0.5 倍数（不被 conductor 调制：
+	// 之前 rp-40 把 ratio 锚到 1.0 at 低能 → 配合 modIndex=0 时事件就成纯 sine 听不见）
 	float rawRatio = fmRatio.get();
-
-	// FM ratio conductor 调制：低能量锚到 1.0（和谐自我调制），
-	// 高能量到 user 设定值（通常 inharmonic 金属感）
-	// → event 音色随 conductor 从"纯净"过渡到"金属"
-	{
-		static const EnergyStage stageRatio {0.3f, 1.0f, 3};   // sigmoid，中段进
-		float ca = conductorAmount.get();
-		float cv = a_conductorValue.load();
-		float energy = 0.5f * (1.0f - ca) + cv * ca;
-		rawRatio = stageRatio.blendRange(energy, 1.0f, rawRatio, ca);
-	}
-
 	float snappedRatio = roundf(rawRatio * 2.0f) / 2.0f;
 	if (snappedRatio < 0.5f) snappedRatio = 0.5f;
 
@@ -249,14 +238,16 @@ void Synth::triggerCollision(const Flock3D::CollisionEvent& ev){
 	// Accent 命中时也让 modIndex 增加（更明亮的重音）
 	if (ev.isAccent) modIndexInit *= 1.5f;
 
-	// FM modIndex 编排：金属感留给高能段（论文 Spectromorphology"node→noise"过渡）
-	// stageFM: 能量 0.5..1.0 段从 modIndex×0 增到 modIndex×1
+	// FM modIndex 编排：高能段更金属，但**永远不归零**（保证事件总是听得见）
+	// stageFM 用 blendRange，低能 floor = userValue × 0.5（仍有 bell 音色），
+	// 高能到 userValue × 1.0
+	// 之前 0.5..1.0 + blend 的写法在低能段 modIndex=0 → 事件成纯 sine 被掩盖
 	{
-		static const EnergyStage stageFM {0.5f, 1.0f, 1};  // exp，晚进
+		static const EnergyStage stageFM {0.0f, 1.0f, 3};  // sigmoid，全程响应
 		float ca = conductorAmount.get();
 		float cv = a_conductorValue.load();
 		float energy = 0.5f * (1.0f - ca) + cv * ca;
-		modIndexInit = stageFM.blend(energy, modIndexInit, ca);
+		modIndexInit = stageFM.blendRange(energy, modIndexInit * 0.5f, modIndexInit, ca);
 	}
 
 	// modIndex 衰减（独立于 carrier）

@@ -423,6 +423,30 @@ effective_len = base_len × (0.5 + audio_influence × sensitivity × 1.5)
 - 拖 GUI 到副屏 / 演出环境分离控制
 - 全屏 flock 时 GUI 不会盖住视觉
 
+## rp-41 — Event 永远可听见（撤回 ratio staging + modIndex 加 floor）
+
+**Commit**: `git tag rp-41-event-audibility`
+
+**用户反馈**：rp-40 之后，能量平缓时事件听不见。诊断：rp-40 把 ratio
+锚到 1.0（low energy），rp-37 同时把 modIndex 锚到 0（low energy stageFM
+0.5-1.0）。两者叠加 → modulator 输出恒为 0 → 最终 voiceSample 是
+**纯 carrier sine** → 被 wind 噪声完全掩盖。
+
+**修法**：
+
+1. **撤回 rp-40 的 ratio staging** —— FM ratio 永远等于用户 slider 值
+   （之前的"金属化"靠这个，现在让 wave fold + modIndex 改变去做）
+2. **modIndex 改用 blendRange + 全程 stage**：
+   - `stageFM` 改成 `{0.0, 1.0, sigmoid}`（全程响应）
+   - `blend → blendRange(energy, modIndex × 0.5, modIndex, ca)`
+   - 低能 floor = 用户 modIndex 的 50%（仍有 bell 音色）
+   - 高能 = 用户 modIndex 100%
+
+**结果**：events **永远有 FM bell 音色**，volume 始终等于用户值。
+Conductor 在能量轴上调的只有 modIndex 50%-100% + event fold（0-100%）。
+
+**保留**：event volume 永远不被 conductor 调（rp-40 的核心承诺）。
+
 ## rp-40 — Event 音色受 conductor 影响（不动音量）
 
 **Commit**: `git tag rp-40-event-timbre`
