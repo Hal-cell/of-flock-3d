@@ -64,6 +64,9 @@ void Synth::buildGui(ofParameterGroup& group){
 	fmGroup.add(fmIndexDecayMs.set("FM idxDecay (ms)",  40.0f, 1.0f, 500.0f));
 	// Tail 长度 → FM idxDecay 正相关调制（base + tail × depth × 400ms）
 	fmGroup.add(tailToIdxDecayDepth.set("tail → idxDecay", 0.5f, 0.0f, 1.0f));
+	// Event wave fold（独立于 drone fold）：每个 event voice 的输出做 sin fold
+	// conductor 高时自动加深（同 stageFold 编排）→ 高能段 event 更金属
+	fmGroup.add(eventFoldAmount.set("event fold", 0.0f, 0.0f, 1.0f));
 	group.add(fmGroup);
 
 	// ─── Cluster Drone 子组（saw + SVF lowpass + chord 优先 pitch）───
@@ -130,6 +133,8 @@ void Synth::drawImGui(){
 		ig::slider(fmIndex);
 		ig::slider(fmIndexDecayMs, "%.0f ms");
 		ig::slider(tailToIdxDecayDepth);
+		ig::slider(eventFoldAmount);
+		ImGui::TextDisabled("event fold 加深 → 钟声金属化；conductor 高时自动加深");
 	}
 
 	if (ig::section("Cluster Drone")) {
@@ -215,6 +220,18 @@ void Synth::triggerCollision(const Flock3D::CollisionEvent& ev){
 
 	// fmRatio: GUI float → snap 到最近 0.5 倍数
 	float rawRatio = fmRatio.get();
+
+	// FM ratio conductor 调制：低能量锚到 1.0（和谐自我调制），
+	// 高能量到 user 设定值（通常 inharmonic 金属感）
+	// → event 音色随 conductor 从"纯净"过渡到"金属"
+	{
+		static const EnergyStage stageRatio {0.3f, 1.0f, 3};   // sigmoid，中段进
+		float ca = conductorAmount.get();
+		float cv = a_conductorValue.load();
+		float energy = 0.5f * (1.0f - ca) + cv * ca;
+		rawRatio = stageRatio.blendRange(energy, 1.0f, rawRatio, ca);
+	}
+
 	float snappedRatio = roundf(rawRatio * 2.0f) / 2.0f;
 	if (snappedRatio < 0.5f) snappedRatio = 0.5f;
 
@@ -579,6 +596,14 @@ void Synth::audioOut(ofSoundBuffer& buffer){
 	float foldDrive = 1.0f + effFold * 5.0f;
 	bool foldActive = effFold > 0.001f;
 
+	// ─── Event Wave Folder（独立于 drone fold）───
+	// 共用 stageFold（同样高能晚进），但用 user 自己设的 eventFoldAmount 作 base
+	// → drone 和 event 可分别开关 fold 量
+	float baseEventFold  = eventFoldAmount.get();
+	float effEventFold   = stageFold.blend(energy, baseEventFold, condAmt);
+	float eventFoldDrive = 1.0f + effEventFold * 5.0f;
+	bool eventFoldActive = effEventFold > 0.001f;
+
 	// ─── 预算 Wind 层参数（per-buffer，每 sample 不变）───
 	// stageWind：风声 0..0.5 能量段就饱和（铺底纹理，最先进场）
 	float wndVol = stageWind.blend(energy, windVol.get(), condAmt);
@@ -705,6 +730,13 @@ void Synth::audioOut(ofSoundBuffer& buffer){
 		// 归一化：除以 voice 数量
 		eventSumL *= evtVol * (2.0f / NUM_EVENT_VOICES);
 		eventSumR *= evtVol * (2.0f / NUM_EVENT_VOICES);
+
+		// Event Wave Folder：sin(x · drive) 加密谐波（高能段事件更金属）
+		if (eventFoldActive) {
+			eventSumL = sinf(eventSumL * eventFoldDrive);
+			eventSumR = sinf(eventSumR * eventFoldDrive);
+		}
+
 		left  += eventSumL;
 		right += eventSumR;
 

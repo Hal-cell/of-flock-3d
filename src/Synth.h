@@ -108,6 +108,7 @@ private:
 	ofParameter<float> fmIndex;        // 调制深度
 	ofParameter<float> fmIndexDecayMs; // modIndex 衰减时长（ms）
 	ofParameter<float> tailToIdxDecayDepth; // tail 长度对 fmIdxDecay 的调制深度（0..1）
+	ofParameter<float> eventFoldAmount; // event 输出 wave fold（音色更金属）— conductor 自动加深
 
 	// ─── Wind 层参数（持续滤波噪声，模拟风声）───
 	// 音量手动控制（vol slider）；field amp 总和 → 调制 cutoff（field 越强 → 风越亮锐）

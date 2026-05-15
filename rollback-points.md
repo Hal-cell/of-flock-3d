@@ -423,6 +423,28 @@ effective_len = base_len × (0.5 + audio_influence × sensitivity × 1.5)
 - 拖 GUI 到副屏 / 演出环境分离控制
 - 全屏 flock 时 GUI 不会盖住视觉
 
+## rp-40 — Event 音色受 conductor 影响（不动音量）
+
+**Commit**: `git tag rp-40-event-timbre`
+
+**用户反馈**：event sound（merge 触发的 FM 钟声）的**音量**不应该被 conductor
+影响（因为视觉端每次 merge 都会有 flash，声音对应被压低会不同步）。但**音色**
+可以受 conductor 影响 —— 让高能段事件听起来更金属 / 更密集。
+
+**实施**：
+
+| 修饰 | 怎么做 | 效果 |
+|---|---|---|
+| **FM ratio** 跟能量耦合 | `triggerCollision` 内用 stageRatio (0.3-1.0 sigmoid) 把 ratio 在 `[1.0, userRatio]` 间插值 | 低能：和谐自我调制；高能：用户设的不和谐金属 |
+| **Event wave fold** | 新参数 `eventFoldAmount` 0..1，audioOut 算 effEventFold = stageFold.blend(...)，然后 `sinf(eventSum × drive)` | 高能段事件更金属化（独立于 drone fold） |
+
+**未动**：
+- `eventVol` / `eventGainPerHit` / `carrierAmp` 都没接 conductor → 音量永远等于
+  用户 slider 值。merge flash 跟钟声音量永远 1:1 同步。
+- modIndex 仍按 rp-37 的 stageFM 调（视为音色而非音量）。
+
+**新 GUI 控件**：FM (Event Tone) section 多一个 `event fold` slider。
+
 ## rp-39 — Score Mode（论文 Figure 2 一键演奏）
 
 **Commit**: `git tag rp-39-score-mode`
