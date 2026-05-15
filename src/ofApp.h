@@ -5,6 +5,7 @@
 #include "ofxImGui.h"      // GUI 渲染（运行在 guiWindow）
 #include "Flock3D.h"
 #include "Synth.h"
+#include "MorphologyConductor.h"
 
 class ofApp : public ofBaseApp {
 public:
@@ -27,14 +28,17 @@ public:
 private:
 	Flock3D flock;
 	Synth   synth;
+	MorphologyConductor conductor;
 
 	ofSoundStream soundStream;
 
 	// 参数组保留 → ofxPanel 处理 XML save/load（不渲染界面，只做持久化）
 	ofParameterGroup flockParams;
 	ofParameterGroup synthParams;
+	ofParameterGroup morphologyParams;
 	ofxPanel flockGui;
 	ofxPanel synthGui;
+	ofxPanel morphologyGui;
 
 	// ImGui — 在 drawGui() 第一次触发时初始化（保证 listener attach 到 gui window）
 	ofxImGui::Gui imgui;

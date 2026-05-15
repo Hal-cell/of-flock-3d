@@ -39,6 +39,10 @@ public:
 	// 主线程：field amp 总和归一化（0..1）驱动风声音量
 	void setFieldAmpTotal(float v) { a_fieldAmpTotal.store(v); }
 
+	// 主线程：morphology conductor 输出值（0..1，baseline=0.5）
+	// 论文 Spectromorphological Synchresis：与 visual 共享同一条轨迹曲线
+	void setConductorValue(float v) { a_conductorValue.store(v); }
+
 	// HUD 用：当前活跃（attack/sustain/release 中）的 drone voice 数
 	int getActiveDroneCount() const;
 
@@ -168,6 +172,13 @@ private:
 
 	// 来自 Flock3D：6 个 field amp 总和归一化（0..1），驱动风声音量
 	std::atomic<float> a_fieldAmpTotal{0.0f};
+
+	// 来自 MorphologyConductor：0..1 共享形态学能量（baseline 0.5）
+	// 论文 Spectromorphological Synchresis：与 visual 共用一条轨迹曲线
+	std::atomic<float> a_conductorValue{0.5f};
+
+	// Conductor 对 Synth 的影响幅度（用户调，0=不受影响）
+	ofParameter<float> conductorAmount;
 
 	// 检测 scale 切换（主线程）：记上次值，变化时让所有活 voice 重新对齐到新 scale
 	int lastScaleType = -1;

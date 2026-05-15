@@ -21,3 +21,6 @@ bin/data/snapshot_*.png
 
 # Settings xml is per-user — exclude so repo stays clean
 # bin/data/settings.xml
+
+# Hal's PhD paper drafts + figures — keep local, repo is public
+Eassy/

@@ -8,12 +8,15 @@ void ofApp::setup(){
 	ofSetVerticalSync(true);
 	ofBackground(0);
 
-	// ─── Flock + Synth 参数 ───
+	// ─── Flock + Synth + Conductor 参数 ───
 	flock.buildGui(flockParams);
 	flockGui.setup(flockParams);
 
 	synth.buildGui(synthParams);
 	synthGui.setup(synthParams);
+
+	conductor.buildGui(morphologyParams);
+	morphologyGui.setup(morphologyParams);
 
 	// 自动加载上次的设置（在 flock.setup 之前，让 setup 用上恢复值）
 	if (ofFile::doesFileExist(ofToDataPath("flock_settings.xml"))) {
@@ -24,8 +27,13 @@ void ofApp::setup(){
 		synthGui.loadFromFile("synth_settings.xml");
 		ofLogNotice() << "loaded synth_settings.xml";
 	}
+	if (ofFile::doesFileExist(ofToDataPath("morphology_settings.xml"))) {
+		morphologyGui.loadFromFile("morphology_settings.xml");
+		ofLogNotice() << "loaded morphology_settings.xml";
+	}
 
 	flock.setup(ofGetWidth(), ofGetHeight());
+	conductor.setup();
 
 	// ─── 音频引擎 ───
 	int sampleRate  = 44100;
@@ -99,13 +107,20 @@ void ofApp::exit(){
 	soundStream.close();
 	flockGui.saveToFile("flock_settings.xml");
 	synthGui.saveToFile("synth_settings.xml");
-	ofLogNotice() << "saved flock_settings.xml + synth_settings.xml";
+	morphologyGui.saveToFile("morphology_settings.xml");
+	ofLogNotice() << "saved flock_settings.xml + synth_settings.xml + morphology_settings.xml";
 }
 
 //==============================================================
 //  update — 主线程（main window 上下文）
 //==============================================================
 void ofApp::update(){
+	// Morphology Conductor 先更新（论文 Spectromorphological Synchresis 顶层指挥）
+	conductor.update(ofGetLastFrameTime());
+	float morphV = conductor.value();
+	flock.setConductorValue(morphV);
+	synth.setConductorValue(morphV);
+
 	flock.update();
 
 	// Audio → Visual：音频活跃度 → trail 长度
@@ -188,7 +203,21 @@ void ofApp::drawGui(ofEventArgs&){
 		ImGui::TextDisabled("  fps %.1f", ofGetFrameRate());
 		ImGui::Separator();
 
+		// HUD 第二行：morphology conductor 状态
+		ImGui::TextColored(ImVec4(0.85f, 0.7f, 0.4f, 1.0f),
+		                   "morphology: %-13s value %.2f  phase %.2f",
+		                   conductor.getModeName().c_str(),
+		                   conductor.value(),
+		                   conductor.phaseProgress());
+		ImGui::Separator();
+
 		if (ImGui::BeginTabBar("MainTabs")) {
+			if (ImGui::BeginTabItem("Morphology")) {
+				ImGui::BeginChild("MorphScroll", ImVec2(0, 0), false);
+				conductor.drawImGui();
+				ImGui::EndChild();
+				ImGui::EndTabItem();
+			}
 			if (ImGui::BeginTabItem("Visual")) {
 				ImGui::BeginChild("VisualScroll", ImVec2(0, 0), false);
 				flock.drawImGui();
@@ -218,6 +247,8 @@ void ofApp::drawGui(ofEventArgs&){
 				            flock.getCurrentTailNormalized());
 				ImGui::Text("field amp total (→ wind) : %.2f",
 				            flock.getFieldAmpTotal());
+				ImGui::Text("morphology conductor : %.2f (%s)",
+				            conductor.value(), conductor.getModeName().c_str());
 				ImGui::EndTabItem();
 			}
 			ImGui::EndTabBar();

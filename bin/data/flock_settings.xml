@@ -8,14 +8,14 @@
 	<hueBase>0.523789</hueBase>
 	<hueRange>0.095125</hueRange>
 	<brightness>1</brightness>
-	<noise_amp>200</noise_amp>
-	<noise_scale>0.0004</noise_scale>
+	<noise_amp>169</noise_amp>
+	<noise_scale>0.001</noise_scale>
 	<noise_speed>0.5</noise_speed>
-	<vortex_amp>191.7</vortex_amp>
-	<spiral_amp>6.2</spiral_amp>
-	<curl_amp>194.8</curl_amp>
-	<attractor_amp>200</attractor_amp>
-	<repeller_amp>121.2</repeller_amp>
+	<vortex_amp>27.8</vortex_amp>
+	<spiral_amp>69.8</spiral_amp>
+	<curl_amp>200</curl_amp>
+	<attractor_amp>51.6</attractor_amp>
+	<repeller_amp>50</repeller_amp>
 	<flock_sep>2</flock_sep>
 	<flock_coh>5.389</flock_coh>
 	<coh_speed>0.171</coh_speed>
@@ -24,8 +24,8 @@
 	<spawn_rate>40000</spawn_rate>
 	<min_alive>0.89</min_alive>
 	<damping>0.95</damping>
-	<sizeMin>2.26543</sizeMin>
-	<sizeMax>8.18289</sizeMax>
+	<sizeMin>1.6</sizeMin>
+	<sizeMax>7.3</sizeMax>
 	<lifecycle_MODE>1</lifecycle_MODE>
 	<life_min_frames>180</life_min_frames>
 	<life_max_frames>600</life_max_frames>
@@ -48,4 +48,5 @@
 	<specular>0.643789</specular>
 	<ambient>0.35377</ambient>
 	<glow>0.00990234</glow>
+	<conductor_amount>0.845</conductor_amount>
 </Flock_3D>

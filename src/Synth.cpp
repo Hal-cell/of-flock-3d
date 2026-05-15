@@ -85,6 +85,11 @@ void Synth::buildGui(ofParameterGroup& group){
 	windGroup.add(windLfoRate.set("gust rate (Hz)",  0.4f,    0.05f,   4.0f));
 	windGroup.add(windLfoDepth.set("gust depth",     0.4f,    0.0f,    1.0f));
 	group.add(windGroup);
+
+	// ─── Morphology Conductor 影响 ───
+	// 论文 Spectromorphological Synchresis：conductor 曲线对 audio 侧 brightness 的影响幅度
+	// 0 = 不受影响（向后兼容 rp-34）；1 = 满影响（conductor 1.0 → drone cutoff + FM index 双倍）
+	group.add(conductorAmount.set("conductor amount", 0.0f, 0.0f, 1.0f));
 }
 
 //--------------------------------------------------------------
@@ -146,6 +151,14 @@ void Synth::drawImGui(){
 		ig::slider(reverbSize);
 		ig::slider(reverbDamp);
 		ig::slider(reverbPreDelayMs, "%.0f ms");
+	}
+
+	if (ig::section("Conductor → Audio")) {
+		ImGui::TextWrapped(
+			"How strongly does the Morphology Conductor modulate audio "
+			"brightness (drone cutoff + FM index)?");
+		ig::slider(conductorAmount);
+		ImGui::TextDisabled("0 = no effect; 1 = full coupling.");
 	}
 }
 
@@ -211,6 +224,13 @@ void Synth::triggerCollision(const Flock3D::CollisionEvent& ev){
 
 	// Accent 命中时也让 modIndex 增加（更明亮的重音）
 	if (ev.isAccent) modIndexInit *= 1.5f;
+
+	// Morphology Conductor 调制（论文 Spectromorphological Synchresis）：
+	// conductor 0..1 → modIndex 在 (1-amount) .. (1+amount) 之间缩放
+	float ca = conductorAmount.get();
+	float cv = a_conductorValue.load();
+	float conductorScalar = 1.0f + (cv - 0.5f) * 2.0f * ca;
+	modIndexInit *= conductorScalar;
 
 	// modIndex 衰减（独立于 carrier）
 	// Tail 调制：tail 长度 × depth × 400ms 加到 base idxDecay 上（正相关）
@@ -497,8 +517,24 @@ void Synth::audioOut(ofSoundBuffer& buffer){
 	}
 	ringRead.store(r, std::memory_order_release);
 
+	// ─── Morphology Conductor 调制（per-buffer，audio thread 安全 atomic load）───
+	// 论文 Spectromorphological Synchresis：conductor 曲线在 buffer 起始 sample 一次
+	// 缩放整个 audio 侧的"亮度+音量"复合指标。
+	// 影响：
+	//   - wind volume        （持续层，音量变化最直接听到）
+	//   - cluster drone vol  （持续层，cluster 存在时听到）
+	//   - drone cutoff       （音色亮度）
+	//   - FM modIndex        （事件音色亮度，在 triggerCollision 内处理）
+	float audioCondScalar;
+	{
+		float ca = conductorAmount.get();
+		float cv = a_conductorValue.load();
+		audioCondScalar = 1.0f + (cv - 0.5f) * 2.0f * ca;
+	}
+
 	// ─── 预算 SVF cutoff / resonance 系数（per-buffer，每 sample 不变）───
-	float cutoff = ofClamp(clusterCutoff.get(), 20.0f, sampleRate * 0.4f);
+	float baseCutoff = ofClamp(clusterCutoff.get(), 20.0f, sampleRate * 0.4f);
+	float cutoff = ofClamp(baseCutoff * audioCondScalar, 20.0f, sampleRate * 0.4f);
 	float svfFc = 2.0f * sinf(PI * cutoff / sampleRate);
 	if (svfFc > 0.99f) svfFc = 0.99f;
 	float svfQ  = 1.0f - ofClamp(clusterResonance.get(), 0.0f, 0.95f);
@@ -521,7 +557,8 @@ void Synth::audioOut(ofSoundBuffer& buffer){
 	if (glideCoef > 1.0f) glideCoef = 1.0f;
 
 	// ─── 预算 Wind 层参数（per-buffer，每 sample 不变）───
-	float wndVol = windVol;                                                    // 独立音量
+	// 用 audioCondScalar 缩放音量 → conductor ascent 时 wind 越来越响（最直接听感）
+	float wndVol = windVol * audioCondScalar;                                  // 独立音量
 	float wndCutoffBase = ofClamp(windCutoff.get(), 50.0f, sampleRate * 0.4f); // base cutoff
 	float wndQ = 1.0f - ofClamp(windResonance.get(), 0.0f, 0.95f);
 	if (wndQ < 0.05f) wndQ = 0.05f;
@@ -538,7 +575,8 @@ void Synth::audioOut(ofSoundBuffer& buffer){
 		// A. Cluster Drone — 多声部，每 voice = 3 detuned saw + SVF lowpass
 		// ───────────────────────────────
 		{
-			float cdrVol = clusterDroneVol;
+			// conductor 缩放 drone 音量（cluster 存在时听感最直接）
+			float cdrVol = clusterDroneVol * audioCondScalar;
 			float cdrSumL = 0, cdrSumR = 0;
 			for (int v = 0; v < NUM_DRONE_VOICES; v++) {
 				auto& dv = droneVoices[v];

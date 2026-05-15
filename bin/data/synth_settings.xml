@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <Synth>
 	<audio_ON>1</audio_ON>
-	<masterVol>0.67</masterVol>
+	<masterVol>0.032</masterVol>
 	<droneVol>0</droneVol>
 	<voiceVol>0.7</voiceVol>
 	<reverbAmt>0.815</reverbAmt>
@@ -34,7 +34,7 @@
 		<tail_→_idxDecay>0.5</tail_→_idxDecay>
 	</FM>
 	<ClusterDrone>
-		<vol>0.259</vol>
+		<vol>0.734</vol>
 		<attack__ms_>3052.81</attack__ms_>
 		<release__ms_>4876.79</release__ms_>
 		<detune>0.00791075</detune>
@@ -56,4 +56,5 @@
 		<amp→cutoff>0.544</amp→cutoff>
 	</Wind>
 	<drone_glide__ms_>2427</drone_glide__ms_>
+	<conductor_amount>0.817</conductor_amount>
 </Synth>

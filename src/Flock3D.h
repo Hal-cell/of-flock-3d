@@ -75,6 +75,10 @@ public:
 	// 影响 trail 长度（正相关：audio 越"亮"/越"长"，尾巴越长）
 	void setAudioInfluence(float v) { audioInfluence = v; }
 
+	// 由 ofApp 每帧调用：morphology conductor 输出值（0..1，baseline=0.5）
+	// 见 论文 Spectromorphological Synchresis 节
+	void setConductorValue(float v) { conductorValue = v; }
+
 	// 提供 tail 长度归一化（0..1）给 Synth — 调制 FM idxDecay
 	// 用 base tail length（GUI slider 值）— 避免和 audio→tail 形成反馈循环
 	float getCurrentTailNormalized() const {
@@ -219,6 +223,19 @@ private:
 	ofParameter<float> tailAudioSensitivity;   // 音频影响敏感度（0=纯手动，2=高度耦合）
 	ofParameter<float> tailAlpha;              // trail 整体 alpha
 	float              audioInfluence = 0.0f;  // 来自外部 setAudioInfluence()
+
+	// ─── Morphology Conductor 输入 ───
+	// conductorValue: 0..1, baseline=0.5（来自顶层 MorphologyConductor）
+	// conductorAmount: 0..1（用户调节 conductor 对 Flock 的影响强度，0=不受影响）
+	// 论文：Spectromorphological Synchresis — ascent/descent/osc 形态学曲线驱动
+	//       视觉的 "energy-motion trajectory"
+	ofParameter<float> conductorAmount;
+	float              conductorValue = 0.5f;
+	// 调制目标（视觉侧）：
+	//   - field amp scalar     → 6 个 field amp 同时乘
+	//   - particle size scalar → 粒子 size 缩放
+	//   - brightness scalar    → 整体 brightness 缩放
+	// 在 update() / draw() 起始计算 conductorScalar，传给 helpers
 
 	// ─── Material（着色 3D 小球 + 可调 halo；flash 时切换到 soft-disc）───
 	// 平时：sphere（Lambert + spec）+ halo（可调 glow）

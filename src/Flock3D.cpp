@@ -77,6 +77,11 @@ void Flock3D::buildGui(ofParameterGroup& group) {
 	group.add(matSpecular.set("specular",       0.35f, 0.0f, 1.0f));
 	group.add(matAmbient.set("ambient",         0.25f, 0.0f, 0.5f));
 	group.add(matGlow.set("glow",               0.3f,  0.0f, 1.5f));
+
+	// ─── Morphology Conductor 影响强度 ───
+	// 论文 Spectromorphological Synchresis：conductor 输出曲线对 visual field amp 的影响幅度
+	// 0 = 不受影响（向后兼容 rp-34）；1 = 满影响（conductor 0→1 让 field 0→2x）
+	group.add(conductorAmount.set("conductor amount", 0.0f, 0.0f, 1.0f));
 }
 
 //==============================================================
@@ -159,6 +164,14 @@ void Flock3D::drawImGui() {
 		ig::slider(matSpecular);
 		ig::slider(matAmbient);
 		ig::slider(matGlow);
+	}
+
+	if (ig::section("Conductor → Visual")) {
+		ImGui::TextWrapped(
+			"How strongly does the Morphology Conductor modulate the "
+			"visual field amplitudes (论文：Spectromorphological Synchresis)?");
+		ig::slider(conductorAmount);
+		ImGui::TextDisabled("0 = no effect; 1 = full coupling.");
 	}
 }
 
@@ -334,6 +347,15 @@ glm::vec3 Flock3D::computeFieldForce(const glm::vec3& pos, float ns) const {
 			total += pos * invR2 * (s * 8000.0f);
 		}
 	}
+
+	// Morphology Conductor 调制（论文 Spectromorphological Synchresis）：
+	// conductorValue 0..1（0.5=baseline）经 conductorAmount 缩放后乘到 total。
+	// At amount=0: 不影响（scalar=1）。
+	// At amount=1, conductor=1.0: scalar=2.0（双倍 field force）。
+	// At amount=1, conductor=0.0: scalar=0.0（field force 归零，粒子静止）。
+	float ca = conductorAmount.get();
+	float conductorScalar = 1.0f + (conductorValue - 0.5f) * 2.0f * ca;
+	total *= conductorScalar;
 
 	return total;
 }

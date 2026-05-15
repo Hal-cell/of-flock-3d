@@ -423,6 +423,72 @@ effective_len = base_len × (0.5 + audio_influence × sensitivity × 1.5)
 - 拖 GUI 到副屏 / 演出环境分离控制
 - 全屏 flock 时 GUI 不会盖住视觉
 
+## rp-35 — Morphology Conductor（论文 Spectromorphological Synchresis 落地）
+
+**Commit**: `git tag rp-35-morphology-conductor`
+
+**论文背景**：基于 Hal 的论文 *Application of Spectromorphology in Abstract
+Audiovisual Composition*，核心概念 **Spectromorphological Synchresis** 主张
+"声画沿共享 energy-motion trajectory 协同演化"。这一概念落地实现需要顶层"指挥"
+模块产出共享曲线，**同时驱动**音频和视觉参数。
+
+**新增文件**：
+- `src/MorphologyConductor.h/cpp`：独立 controller 类
+
+**Conductor 类**：
+- 5 种 motion mode：FREE / ASCENT / DESCENT / OSCILLATION / ASCENT_OSC /
+  DESCENT_OSC（最后两种是 Smalley 1997 描述的 nested morphology — osc 嵌入
+  ascent/descent 内）
+- 4 种 curve shape：LINEAR / EXPONENTIAL / LOGARITHMIC / SIGMOID
+- 输出 `value()` ∈ [0..1]，0.5 = baseline
+- 历史 ring buffer 240 帧（给 ImGui PlotLines 显示 trajectory）
+- 触发模式：手动 trigger（按钮重启 phase）+ auto loop
+
+**Nested 实现细节**（论文 page 6 Figure 2 — Hal 的 nested.png 校准）：
+ASCENT_OSC 的振荡幅度**随 phase 同步增长**（peak1 < peak2 < ... < peakN），
+不是恒定振幅叠在 ramp 上。公式：
+```
+pcurve   = applyCurve(phase)
+effDepth = oscDepth × pcurve         (振幅 0 → max)
+center   = pcurve × (1 - effDepth)   (保证 phase=1 peak 触顶 1)
+v        = center + effDepth × sin(2π·oscRate·t)
+```
+边界：phase=0 时 v=0 平静起步；phase=1 时 peak=1 / trough=1-2·depth。
+DESCENT_OSC 镜像：振幅 max → 0，结尾平静收场。
+
+**连续性 bridging**：mode 切换 / curve 切换 / auto-loop 循环边界都
+有跳变。每次跳变捕获 `bridgeOffset = preValue - newRawValue`，
+然后 exp decay（系数 0.92 @ 60fps，~250ms 主体过渡，~1s 残余 1%）
+→ 永远无跳变，论文 Figure 2 三段平滑衔接成立。
+trigger() 显式重启时清零 bridgeOffset。
+
+**接入 — conductor 缩放的目标参数**：
+- **Flock 侧**：`computeFieldForce()` 末尾把 total *= conductorScalar
+  （6 个 field force 同时缩放：noise / vortex / spiral / curl / attractor / repeller）
+- **Synth 侧（per-buffer 计算一次 audioCondScalar）**：
+  - `wndVol = windVol * audioCondScalar`（**wind 音量** — 持续层最直接听感）
+  - `cdrVol = clusterDroneVol * audioCondScalar`（**drone 音量** — cluster 在时直接听到）
+  - `cutoff = baseCutoff * audioCondScalar`（drone SVF cutoff 亮度）
+  - `triggerCollision()` 内 `modIndexInit *= conductorScalar`（FM 事件亮度）
+
+`conductorScalar = 1 + (cv - 0.5) * 2 * conductorAmount`
+- amount=0 → scalar 恒为 1（不影响，rp-34 兼容）
+- amount=1, cv=1 → scalar=2（双倍）
+- amount=1, cv=0 → scalar=0（归零 — DESCENT 时声音 / field 完全停）
+- `ofApp::update()` 每帧 `conductor.update(dt)` → 把 value 推给 flock + synth
+- 新 Morphology tab 在 ImGui 中（独立窗口里），加 PlotLines trajectory 可视化
+- 顶部 HUD 加一行显示 morphology mode + value + phase
+- 新文件 `morphology_settings.xml` 持久化 conductor 状态
+
+**向后兼容**：`conductorAmount` 默认 0（不影响任何参数）→ build 完跑起来感觉
+跟 rp-34 完全一样。要启用 conductor，调 Flock 和 Synth 的 conductor amount
+slider 到 > 0，再选一个 motion mode（如 ascent）。
+
+**Use this checkpoint to**:
+- 用 Score Mode / counterpoint 等 P1+ 功能往下扩
+- 把 conductor 拓展为多通道（分别给 Flock 和 Synth 不同的 trajectory，
+  实现论文 audiovisual counterpoint 节）
+
 ## rp-34 — ImGui widget ID collision fix
 
 **Commit**: `git tag rp-34-imgui-id-fix`
@@ -458,3 +524,14 @@ ofParameter 地址唯一 → ID 唯一。display label 保持原状，drawImGui
 **Use this checkpoint to**:
 - 任何"粒子有锯齿/毛边"复发的回滚基线
 - 性能调优实验起点（如果还有更多 perf 工作要做）
+
+
+
+
+
+
+
+rp-34（ImGui ID fix）论文前版本
+
+想做一个spectromorphology sequencer 能够衔接自选的8个morphology并且loop
+以及你需要判断morphology是否可以衔接，
