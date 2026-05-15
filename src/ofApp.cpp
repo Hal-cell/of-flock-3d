@@ -373,3 +373,22 @@ void ofApp::keyPressed(int key){
 void ofApp::windowResized(int w, int h){
 	flock.setup(w, h);
 }
+
+//==============================================================
+//  Drag & drop — 拖 audio 文件进主窗口 → 换 granular 源
+//==============================================================
+void ofApp::dragEvent(ofDragInfo dragInfo){
+	if (dragInfo.files.empty()) return;
+
+	for (const auto& path : dragInfo.files) {
+		std::string ext = ofToLower(ofFilePath::getFileExt(path));
+		if (ext == "wav" || ext == "aif" || ext == "aiff" || ext == "flac") {
+			bool ok = synth.loadGrainSource(path);
+			if (ok) {
+				ofLogNotice() << "granular source ← " << ofFilePath::getFileName(path);
+				return;   // 用第一个能加载的
+			}
+		}
+	}
+	ofLogWarning() << "drag: no usable audio file (wav/aif/flac)";
+}

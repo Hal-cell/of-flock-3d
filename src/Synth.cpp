@@ -25,33 +25,112 @@ void Synth::setup(int sr, int bs){
 	preDelayBuf.assign(preDelayBufLen, 0.0f);
 	preDelayWrite = 0;
 
-	// ─── Granular source: 4 秒合成"3 detuned sine + 慢 LFO + 微弱噪声"（rp-44）───
-	// 自包含，不依赖外部 wav 文件
-	grainSourceLen = 4 * sampleRate;
-	grainSource.assign(grainSourceLen, 0.0f);
-	{
-		// 3 个 detuned sine 基频
-		float f1 = 110.0f, f2 = 110.0f * 1.005f, f3 = 165.0f;
-		float p1 = 0.0f, p2 = 0.0f, p3 = 0.0f;
-		float lfoPhase = 0.0f;
-		for (int i = 0; i < grainSourceLen; i++) {
-			float dt = 1.0f / sampleRate;
-			float lfo = sinf(lfoPhase * TWO_PI);
-			lfoPhase += 0.13f * dt;
-			if (lfoPhase >= 1.0f) lfoPhase -= 1.0f;
-			float ampMod = 0.7f + lfo * 0.3f;
-			// noise（弱）
-			float n = ((float)std::rand() / RAND_MAX - 0.5f) * 0.05f;
-			// 3 sines + 噪声
-			float s = (sinf(p1 * TWO_PI) * 0.40f
-			        +  sinf(p2 * TWO_PI) * 0.35f
-			        +  sinf(p3 * TWO_PI) * 0.25f) * ampMod + n;
-			p1 += f1 * dt;  if (p1 >= 1.0f) p1 -= 1.0f;
-			p2 += f2 * dt;  if (p2 >= 1.0f) p2 -= 1.0f;
-			p3 += f3 * dt;  if (p3 >= 1.0f) p3 -= 1.0f;
-			grainSource[i] = s * 0.7f;
-		}
+	// ─── Granular source: 默认合成 4 秒"3 detuned sine + 慢 LFO + 微弱噪声"───
+	// 自包含，不依赖外部 wav 文件；用户后续可拖拽 wav 替换
+	synthesizeDefaultGrainSource();
+}
+
+//--------------------------------------------------------------
+//  Granular source 默认合成 + 拖拽加载
+//--------------------------------------------------------------
+void Synth::synthesizeDefaultGrainSource() {
+	std::vector<float> src(4 * sampleRate);
+	float f1 = 110.0f, f2 = 110.0f * 1.005f, f3 = 165.0f;
+	float p1 = 0.0f, p2 = 0.0f, p3 = 0.0f;
+	float lfoPhase = 0.0f;
+	for (size_t i = 0; i < src.size(); i++) {
+		float dt = 1.0f / sampleRate;
+		float lfo = sinf(lfoPhase * TWO_PI);
+		lfoPhase += 0.13f * dt;
+		if (lfoPhase >= 1.0f) lfoPhase -= 1.0f;
+		float ampMod = 0.7f + lfo * 0.3f;
+		float n = ((float)std::rand() / RAND_MAX - 0.5f) * 0.05f;
+		float s = (sinf(p1 * TWO_PI) * 0.40f
+		        +  sinf(p2 * TWO_PI) * 0.35f
+		        +  sinf(p3 * TWO_PI) * 0.25f) * ampMod + n;
+		p1 += f1 * dt;  if (p1 >= 1.0f) p1 -= 1.0f;
+		p2 += f2 * dt;  if (p2 >= 1.0f) p2 -= 1.0f;
+		p3 += f3 * dt;  if (p3 >= 1.0f) p3 -= 1.0f;
+		src[i] = s * 0.7f;
 	}
+	{
+		std::lock_guard<std::mutex> lk(grainSourceMutex);
+		grainSource = std::move(src);
+		grainSourceLen = (int)grainSource.size();
+		grainSourceName = "default (synthesized drone)";
+		for (auto& g : grains) g.active = false;
+	}
+}
+
+void Synth::resetGrainSourceDefault() {
+	synthesizeDefaultGrainSource();
+}
+
+bool Synth::loadGrainSource(const std::string& path) {
+	ofSoundFile sf;
+	if (!sf.load(path)) {
+		ofLogError("Synth") << "loadGrainSource: failed to load " << path;
+		return false;
+	}
+	ofSoundBuffer buf;
+	sf.readTo(buf);
+	int srcSr = (int)buf.getSampleRate();
+	int numCh = (int)buf.getNumChannels();
+	int numFrames = (int)buf.getNumFrames();
+	if (numFrames < 100) {
+		ofLogError("Synth") << "loadGrainSource: too short (" << numFrames << " frames)";
+		return false;
+	}
+
+	// 转 mono
+	std::vector<float> mono(numFrames);
+	for (int i = 0; i < numFrames; i++) {
+		float s = 0.0f;
+		for (int c = 0; c < numCh; c++) s += buf.getBuffer()[i * numCh + c];
+		mono[i] = s / (float)numCh;
+	}
+
+	// 重采样到 synth sampleRate（如果不一致）
+	if (srcSr != sampleRate && srcSr > 0) {
+		float ratio = (float)sampleRate / (float)srcSr;
+		int newLen = (int)(mono.size() * ratio);
+		std::vector<float> resampled(newLen);
+		for (int i = 0; i < newLen; i++) {
+			float srcIdx = (float)i / ratio;
+			int idx = (int)srcIdx;
+			float frac = srcIdx - (float)idx;
+			if (idx >= (int)mono.size() - 1) {
+				resampled[i] = mono.back();
+			} else {
+				resampled[i] = mono[idx] * (1.0f - frac) + mono[idx + 1] * frac;
+			}
+		}
+		mono = std::move(resampled);
+	}
+
+	// 截到 30 秒（防超长样本占内存）
+	int maxLen = 30 * sampleRate;
+	if ((int)mono.size() > maxLen) mono.resize(maxLen);
+
+	// 简单 normalize 到 ~0.7 peak
+	float peak = 0.0f;
+	for (float v : mono) { float a = fabsf(v); if (a > peak) peak = a; }
+	if (peak > 0.001f) {
+		float g = 0.7f / peak;
+		for (float& v : mono) v *= g;
+	}
+
+	// Atomic swap：拿锁、换 buffer、reset 所有 active grain
+	{
+		std::lock_guard<std::mutex> lk(grainSourceMutex);
+		grainSource = std::move(mono);
+		grainSourceLen = (int)grainSource.size();
+		grainSourceName = ofFilePath::getFileName(path);
+		for (auto& g : grains) g.active = false;
+	}
+	ofLogNotice("Synth") << "loadGrainSource ok: " << grainSourceName
+	                     << " (" << grainSourceLen << " samples, " << numCh << "ch → mono)";
+	return true;
 }
 
 void Synth::buildGui(ofParameterGroup& group){
@@ -211,6 +290,20 @@ void Synth::drawImGui(){
 		ig::slider(grainAttackFrac, "%.2f");
 		ImGui::TextDisabled("attack frac: 0.05 锐 pluck/click | 0.5 对称 Hann/平滑");
 		ImGui::TextDisabled("Effective rate = base + cluster × influence");
+
+		// Sample 状态 + 拖拽提示 + reset
+		ImGui::Separator();
+		std::string srcName;
+		{
+			std::lock_guard<std::mutex> lk(grainSourceMutex);
+			srcName = grainSourceName;
+		}
+		ImGui::TextColored(ImVec4(0.6f, 0.85f, 1.0f, 1.0f),
+		                   "source: %s", srcName.c_str());
+		ImGui::TextDisabled("拖 wav/aif/flac 到主窗口替换 granular 源");
+		if (ImGui::Button("Reset to default source")) {
+			resetGrainSourceDefault();
+		}
 		ImGui::TextDisabled("当前 cluster 数: %d   active grains: %d",
 		                    a_clusterCount.load(),
 		                    (int)std::count_if(grains.begin(), grains.end(),
@@ -869,7 +962,11 @@ void Synth::audioOut(ofSoundBuffer& buffer){
 		// ───────────────────────────────
 		// C2. Granular layer — cluster 数高时颗粒云（rp-44）
 		// 每帧调度新 grain；处理活 grain（windowed 读 source + pitch shift + pan）
+		// 用 try_lock 保护 grainSource swap：主线程拖文件加载时短暂跳过 granular
+		// 一帧（避免读越界 / vector relocation 中读到旧地址）
 		// ───────────────────────────────
+		std::unique_lock<std::mutex> grainLock(grainSourceMutex, std::try_to_lock);
+		if (grainLock.owns_lock())
 		{
 			// 调度新 grain
 			grainSchedAccum -= 1.0f;

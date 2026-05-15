@@ -5,6 +5,7 @@
 #include "EnergyStage.h"
 #include <atomic>
 #include <array>
+#include <mutex>
 
 /**
  * Synth — 基于 Flock3D 状态实时合成音频
@@ -171,7 +172,26 @@ private:
 	// 主线程调用：刷新 cluster 数（影响 grain 触发率）
 public:
 	void setClusterCount(int n) { a_clusterCount.store(n); }
+
+	// 主线程：用户拖了一个 wav/aif/flac 进来 → 替换 granular 源
+	// 返回 true 加载成功
+	bool loadGrainSource(const std::string& path);
+
+	// 主线程：reset 回默认合成源
+	void resetGrainSourceDefault();
+
+	// 当前 source 名（GUI 显示用）
+	std::string currentGrainSourceName() const {
+		std::lock_guard<std::mutex> lk(grainSourceMutex);
+		return grainSourceName;
+	}
 private:
+	// 默认源合成（在 setup 调一次；reset 时可再调）
+	void synthesizeDefaultGrainSource();
+
+	// 保护 grainSource 跨线程换 buffer
+	mutable std::mutex grainSourceMutex;
+	std::string grainSourceName = "default (synthesized drone)";
 
 	// ─── Cluster Drone 参数 ───
 	ofParameterGroup   clusterDroneGroup;
