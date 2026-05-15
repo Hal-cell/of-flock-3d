@@ -550,6 +550,19 @@ void Flock3D::draw(){
 	float flFrames   = (float)flashFrames;
 	float flInt      = flashIntensity;
 
+	// ─── 视觉 EnergyStage（论文 trans-modal "warming / scale" 等映射）───
+	// 跟 Synth 端 5 个 stage 对等
+	float ca = conductorAmount.get();
+	float energy = 0.5f * (1.0f - ca) + conductorValue * ca;
+	// stageSize: 粒子 size 中后期才放大（exp，0.4..1.0）
+	static const EnergyStage stageSize {0.4f, 1.0f, 1};
+	// blend 0..1，再映射到 0.5..1.5 倍率（ca=0 时永远 1）
+	float sizeStageOf = stageSize.stageOf(energy);
+	float sizeMult = (1.0f - ca) + ca * (0.5f + sizeStageOf);    // 0.5..1.5 范围
+	// stageBri: brightness 跟得早一些（0.2..1.0 linear）
+	static const EnergyStage stageBri  {0.2f, 1.0f, 0};
+	float effBri = stageBri.blend(energy, matBrightness.get(), ca);
+
 	for (auto& p : particles) {
 		if (!p.alive) continue;
 
@@ -587,7 +600,7 @@ void Flock3D::draw(){
 		// Size：闪烁时短暂放大；accent 用 flashScale 进一步放大
 		// 普通 merge: flashScale=1 → max 2.5x
 		// accent merge: flashScale~2.5 → max ~6x（受 shader 上限 96px 截断）
-		float displaySize = p.size * (1.0f + flashAmt * 1.5f * p.flashScale);
+		float displaySize = p.size * sizeMult * (1.0f + flashAmt * 1.5f * p.flashScale);
 
 		particleMesh.addColor(c);
 		particleMesh.addTexCoord(glm::vec2(displaySize, 0.0f));
@@ -597,7 +610,7 @@ void Flock3D::draw(){
 	glEnable(GL_PROGRAM_POINT_SIZE);
 
 	particleShader.begin();
-	particleShader.setUniform1f("uBrightness", matBrightness);
+	particleShader.setUniform1f("uBrightness", effBri);
 	particleShader.setUniform1f("uSpecular",   matSpecular);
 	particleShader.setUniform1f("uAmbient",    matAmbient);
 	particleShader.setUniform1f("uGlow",       matGlow);

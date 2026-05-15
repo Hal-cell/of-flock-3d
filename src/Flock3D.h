@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ofMain.h"
+#include "EnergyStage.h"
 
 /**
  * Flock3D — 纯 3D Flock 粒子系统（独立版）

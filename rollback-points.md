@@ -423,6 +423,34 @@ effective_len = base_len × (0.5 + audio_influence × sensitivity × 1.5)
 - 拖 GUI 到副屏 / 演出环境分离控制
 - 全屏 flock 时 GUI 不会盖住视觉
 
+## rp-38 — 视觉 EnergyStage 补齐（声画响应对等）
+
+**Commit**: `git tag rp-38-visual-stages`
+
+**背景**：rp-37 给 Synth 接了 5 个 staged 参数，但 Flock 视觉侧只有 field
+force 一个 conductor 目标 —— 声画响应严重不对等，违反论文 trans-modal
+要求。这一版补齐两个最直观的视觉参数。
+
+**新增 Flock 视觉响应**：
+
+| 参数 | 窗口 | 曲线 | 范围 | 说明 |
+|---|---|---|---|---|
+| `particle size mult` | 0.4 – 1.0 | exp | 0.5× – 1.5× | 高能段放大 |
+| `matBrightness`      | 0.2 – 1.0 | linear | 0 – userVal | 早段就开始提亮 |
+
+**保留**：field force scalar 沿用 rp-37 之前的 `1 + (cv-0.5)·2·ca` 公式
+（multiplier 性质，跟 value-性质参数不一样，没必要重新框）。
+
+**用户体验**：开 conductorAmount=1 跑 ascent：
+- 能量 0：粒子小（×0.5）+ 暗（brightness=0）+ field 0
+- 能量 0.3：brightness 起步（~0.2），其余还压着
+- 能量 0.7：size 起步，brightness 70%，field 0.4×
+- 能量 1.0：size 1.5×，brightness 满，field 2×
+配合 Synth 端：风声 → drone → cutoff → fold → FM 同步五阶进场
+→ 声画**编排同步**完整呈现
+
+**跳过 hue shift**：要写 GLSL HSV 旋转矩阵 + 新 uniform。可作 rp-38.1 或更后。
+
 ## rp-37 — Per-parameter EnergyStage（编排式响应，错峰进场）
 
 **Commit**: `git tag rp-37-energy-stages`
