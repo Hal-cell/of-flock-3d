@@ -619,15 +619,18 @@ void Synth::audioOut(ofSoundBuffer& buffer){
 	float svfFcTarget     = svfFc;       // 已 clamp
 	float foldDriveTarget = foldDrive;
 	float wndVolTarget    = wndVol;
+	float evtVolTarget    = evtVolStaged;   // event vol 也加平滑（之前漏了）
 
 	for (int i = 0; i < n; i++) {
 		float left = 0, right = 0;
 
-		// 每 sample 渐进（1-pole）；coef 0.001 → tau ≈ 16ms
-		cdrVolSmooth    += (cdrVolTarget    - cdrVolSmooth)    * 0.001f;
-		svfFcSmooth     += (svfFcTarget     - svfFcSmooth)     * 0.001f;
-		foldDriveSmooth += (foldDriveTarget - foldDriveSmooth) * 0.001f;
-		windVolSmooth   += (wndVolTarget    - windVolSmooth)   * 0.001f;
+		// 每 sample 渐进（1-pole）；coef 0.0003 → tau ≈ 50ms（比 16ms 更柔）
+		const float SMOOTH = 0.0003f;
+		cdrVolSmooth    += (cdrVolTarget    - cdrVolSmooth)    * SMOOTH;
+		svfFcSmooth     += (svfFcTarget     - svfFcSmooth)     * SMOOTH;
+		foldDriveSmooth += (foldDriveTarget - foldDriveSmooth) * SMOOTH;
+		windVolSmooth   += (wndVolTarget    - windVolSmooth)   * SMOOTH;
+		evtVolSmooth    += (evtVolTarget    - evtVolSmooth)    * SMOOTH;
 
 		// ───────────────────────────────
 		// A. Cluster Drone — 多声部，每 voice = 3 detuned saw + SVF lowpass
@@ -739,8 +742,8 @@ void Synth::audioOut(ofSoundBuffer& buffer){
 			eventSumR += voiceSample * vc.panR;
 		}
 		// 归一化：除以 voice 数量；用 staged event vol（60%..100% 区间）
-		eventSumL *= evtVolStaged * (2.0f / NUM_EVENT_VOICES);
-		eventSumR *= evtVolStaged * (2.0f / NUM_EVENT_VOICES);
+		eventSumL *= evtVolSmooth * (2.0f / NUM_EVENT_VOICES);
+		eventSumR *= evtVolSmooth * (2.0f / NUM_EVENT_VOICES);
 
 		// Event Wave Folder：sin(x · drive) 加密谐波（高能段事件更金属）
 		if (eventFoldActive) {
