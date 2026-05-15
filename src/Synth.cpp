@@ -24,6 +24,34 @@ void Synth::setup(int sr, int bs){
 	preDelayBufLen = (int)(0.25f * sampleRate);
 	preDelayBuf.assign(preDelayBufLen, 0.0f);
 	preDelayWrite = 0;
+
+	// ─── Granular source: 4 秒合成"3 detuned sine + 慢 LFO + 微弱噪声"（rp-44）───
+	// 自包含，不依赖外部 wav 文件
+	grainSourceLen = 4 * sampleRate;
+	grainSource.assign(grainSourceLen, 0.0f);
+	{
+		// 3 个 detuned sine 基频
+		float f1 = 110.0f, f2 = 110.0f * 1.005f, f3 = 165.0f;
+		float p1 = 0.0f, p2 = 0.0f, p3 = 0.0f;
+		float lfoPhase = 0.0f;
+		for (int i = 0; i < grainSourceLen; i++) {
+			float dt = 1.0f / sampleRate;
+			float lfo = sinf(lfoPhase * TWO_PI);
+			lfoPhase += 0.13f * dt;
+			if (lfoPhase >= 1.0f) lfoPhase -= 1.0f;
+			float ampMod = 0.7f + lfo * 0.3f;
+			// noise（弱）
+			float n = ((float)std::rand() / RAND_MAX - 0.5f) * 0.05f;
+			// 3 sines + 噪声
+			float s = (sinf(p1 * TWO_PI) * 0.40f
+			        +  sinf(p2 * TWO_PI) * 0.35f
+			        +  sinf(p3 * TWO_PI) * 0.25f) * ampMod + n;
+			p1 += f1 * dt;  if (p1 >= 1.0f) p1 -= 1.0f;
+			p2 += f2 * dt;  if (p2 >= 1.0f) p2 -= 1.0f;
+			p3 += f3 * dt;  if (p3 >= 1.0f) p3 -= 1.0f;
+			grainSource[i] = s * 0.7f;
+		}
+	}
 }
 
 void Synth::buildGui(ofParameterGroup& group){
@@ -94,6 +122,17 @@ void Synth::buildGui(ofParameterGroup& group){
 	windGroup.add(windLfoDepth.set("gust depth",     0.4f,    0.0f,    1.0f));
 	group.add(windGroup);
 
+	// ─── Granular 子组（rp-44）───
+	// 颗粒采样云：cluster 数高时密度增加；低能段被 conductor staging 压低音量
+	granGroup.setName("Granular");
+	granGroup.add(granVol.set("vol",                       0.3f,  0.0f, 1.0f));
+	granGroup.add(grainSizeMs.set("grain size (ms)",       80.0f, 20.0f, 300.0f));
+	granGroup.add(grainBaseRate.set("base rate (Hz)",       4.0f,  0.5f, 50.0f));
+	granGroup.add(granClusterInfluence.set("cluster influence", 6.0f, 0.0f, 20.0f));
+	granGroup.add(grainPitchSpread.set("pitch spread (st)", 5.0f,  0.0f, 24.0f));
+	granGroup.add(grainPanSpread.set("pan spread",          0.6f,  0.0f, 1.0f));
+	group.add(granGroup);
+
 	// ─── Morphology Conductor 影响 ───
 	// 论文 Spectromorphological Synchresis：conductor 曲线对 audio 侧 brightness 的影响幅度
 	// 0 = 不受影响（向后兼容 rp-34）；1 = 满影响（conductor 1.0 → drone cutoff + FM index 双倍）
@@ -156,6 +195,20 @@ void Synth::drawImGui(){
 		ig::slider(windAmpToCutoff);
 		ig::slider(windLfoRate, "%.2f Hz");
 		ig::slider(windLfoDepth);
+	}
+
+	if (ig::section("Granular (cluster-driven cloud)")) {
+		ig::slider(granVol);
+		ig::slider(grainSizeMs, "%.0f ms");
+		ig::slider(grainBaseRate, "%.1f Hz");
+		ig::slider(granClusterInfluence, "%.1f Hz/cluster");
+		ig::slider(grainPitchSpread, "%.1f st");
+		ig::slider(grainPanSpread);
+		ImGui::TextDisabled("Effective rate = base + cluster × influence");
+		ImGui::TextDisabled("当前 cluster 数: %d   active grains: %d",
+		                    a_clusterCount.load(),
+		                    (int)std::count_if(grains.begin(), grains.end(),
+		                                       [](const Grain& g) { return g.active; }));
 	}
 
 	if (ig::section("Hall Reverb")) {
@@ -620,6 +673,13 @@ void Synth::audioOut(ofSoundBuffer& buffer){
 	float foldDriveTarget = foldDrive;
 	float wndVolTarget    = wndVol;
 	float evtVolTarget    = evtVolStaged;   // event vol 也加平滑（之前漏了）
+	float granVolTarget   = stageDroneV.blend(energy, granVol.get(), condAmt);   // granular 也 staging
+
+	// Granular per-buffer：算 effective rate = base + cluster × influence
+	int   curClusters    = a_clusterCount.load();
+	float effGrainRate   = grainBaseRate.get() + (float)curClusters * granClusterInfluence.get();
+	if (effGrainRate < 0.01f) effGrainRate = 0.01f;
+	float samplesPerGrain = (float)sampleRate / effGrainRate;
 
 	for (int i = 0; i < n; i++) {
 		float left = 0, right = 0;
@@ -631,6 +691,7 @@ void Synth::audioOut(ofSoundBuffer& buffer){
 		foldDriveSmooth += (foldDriveTarget - foldDriveSmooth) * SMOOTH;
 		windVolSmooth   += (wndVolTarget    - windVolSmooth)   * SMOOTH;
 		evtVolSmooth    += (evtVolTarget    - evtVolSmooth)    * SMOOTH;
+		granVolSmooth   += (granVolTarget   - granVolSmooth)   * SMOOTH;
 
 		// ───────────────────────────────
 		// A. Cluster Drone — 多声部，每 voice = 3 detuned saw + SVF lowpass
@@ -794,6 +855,68 @@ void Synth::audioOut(ofSoundBuffer& buffer){
 
 			left  += wL;
 			right += wR;
+		}
+
+		// ───────────────────────────────
+		// C2. Granular layer — cluster 数高时颗粒云（rp-44）
+		// 每帧调度新 grain；处理活 grain（windowed 读 source + pitch shift + pan）
+		// ───────────────────────────────
+		{
+			// 调度新 grain
+			grainSchedAccum -= 1.0f;
+			if (grainSchedAccum <= 0.0f) {
+				for (int g = 0; g < NUM_GRAINS; g++) {
+					if (grains[g].active) continue;
+					grains[g].active = true;
+					grains[g].age = 0;
+					grains[g].length = (int)(grainSizeMs.get() * 0.001f * sampleRate);
+					if (grains[g].length < 1) grains[g].length = 1;
+					// 随机 pitch（[-spread, +spread] 半音）
+					float spread = grainPitchSpread.get();
+					float pitchSemi = (((float)std::rand() / (float)RAND_MAX) * 2.0f - 1.0f) * spread;
+					grains[g].pitch = powf(2.0f, pitchSemi / 12.0f);
+					// 随机源位置（确保有完整 grain length 可读）
+					int maxStart = grainSourceLen - grains[g].length * 3;
+					if (maxStart < 1) maxStart = 1;
+					grains[g].readPos = (float)(std::rand() % maxStart);
+					// 随机 pan
+					float pSpread = grainPanSpread.get();
+					float panRandom = (1.0f - pSpread) * 0.5f
+					                 + ((float)std::rand() / (float)RAND_MAX) * pSpread;
+					grains[g].panL = cosf(panRandom * HALF_PI);
+					grains[g].panR = sinf(panRandom * HALF_PI);
+					break;
+				}
+				grainSchedAccum += samplesPerGrain;
+				if (grainSchedAccum < 1.0f) grainSchedAccum = samplesPerGrain;  // safety
+			}
+
+			// 处理活 grain
+			float gL = 0.0f, gR = 0.0f;
+			for (auto& gr : grains) {
+				if (!gr.active) continue;
+				int idx = (int)gr.readPos;
+				if (idx >= grainSourceLen - 1) {
+					gr.active = false;
+					continue;
+				}
+				float frac = gr.readPos - (float)idx;
+				float s = grainSource[idx] * (1.0f - frac) + grainSource[idx + 1] * frac;
+				// Hann envelope
+				float t = (float)gr.age / (float)gr.length;
+				float env = 0.5f * (1.0f - cosf(2.0f * PI * t));
+				s *= env;
+				gL += s * gr.panL;
+				gR += s * gr.panR;
+				gr.readPos += gr.pitch;
+				gr.age++;
+				if (gr.age >= gr.length) gr.active = false;
+			}
+			// 总音量缩放（× 0.5 防多 grain 累加爆音）
+			gL *= granVolSmooth * 0.5f;
+			gR *= granVolSmooth * 0.5f;
+			left  += gL;
+			right += gR;
 		}
 
 		// ───────────────────────────────

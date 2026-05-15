@@ -1,9 +1,9 @@
 <?xml version="1.0"?>
 <Morphology>
-	<mode>4</mode>
-	<curve>0</curve>
-	<duration__s_>2.4</duration__s_>
-	<osc_rate__Hz_>0.71</osc_rate__Hz_>
-	<osc_depth>0.268</osc_depth>
+	<mode>2</mode>
+	<curve>3</curve>
+	<duration__s_>10</duration__s_>
+	<osc_rate__Hz_>0.5</osc_rate__Hz_>
+	<osc_depth>0.25</osc_depth>
 	<auto_loop>1</auto_loop>
 </Morphology>

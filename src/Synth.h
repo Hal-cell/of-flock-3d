@@ -135,6 +135,42 @@ private:
 	float evtVolSmooth    = 0.6f;
 	float svfFcSmooth     = 0.05f;
 	float foldDriveSmooth = 1.0f;
+	float granVolSmooth   = 0.3f;
+
+	// ─── Granular 层（rp-44）：cluster 密度高时颗粒采样云 ───
+	ofParameterGroup   granGroup;
+	ofParameter<float> granVol;              // 整体音量 0..1
+	ofParameter<float> grainSizeMs;          // 单 grain 时长 (ms)
+	ofParameter<float> grainBaseRate;        // 基础触发率 (grains/sec)
+	ofParameter<float> granClusterInfluence; // cluster 数对触发率的影响 (0..1)
+	ofParameter<float> grainPitchSpread;     // 半音随机偏移
+	ofParameter<float> grainPanSpread;       // pan 随机度
+
+	// 主线程 → 音频线程：当前 cluster 数（为了 grain rate 调制）
+	std::atomic<int>   a_clusterCount{0};
+
+	// 源 buffer（setup 时合成 ~4 秒）
+	std::vector<float> grainSource;
+	int grainSourceLen = 0;
+
+	// Grain pool
+	struct Grain {
+		bool   active   = false;
+		float  readPos  = 0.0f;   // 在 source 里的读位置（带小数 → 线性插值）
+		int    age      = 0;
+		int    length   = 0;
+		float  pitch    = 1.0f;   // 播放速率（1.0 = 原速）
+		float  panL     = 0.7f;
+		float  panR     = 0.7f;
+	};
+	static constexpr int NUM_GRAINS = 16;
+	std::array<Grain, NUM_GRAINS> grains;
+	float grainSchedAccum = 0.0f;   // sample 计数器 → 下一次 grain 触发
+
+	// 主线程调用：刷新 cluster 数（影响 grain 触发率）
+public:
+	void setClusterCount(int n) { a_clusterCount.store(n); }
+private:
 
 	// ─── Cluster Drone 参数 ───
 	ofParameterGroup   clusterDroneGroup;

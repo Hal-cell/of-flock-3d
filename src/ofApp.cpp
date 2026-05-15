@@ -169,6 +169,8 @@ void ofApp::update(){
 	auto clusters = flock.getClusters(Synth::getMaxDroneVoices());
 	synth.updateClusterVoices(clusters, flock.getWorldRadius());
 	lastClusterCount = (int)clusters.size();
+	// 把 cluster 数推给 Synth — granular grain rate 用（cluster 多 → 颗粒更密）
+	synth.setClusterCount(lastClusterCount);
 
 	// 主线程 → synth：本帧的碰撞 → 触发 event 音
 	for (const auto& ev : flock.getCollisionsThisFrame()) {

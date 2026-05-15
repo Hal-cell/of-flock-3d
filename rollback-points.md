@@ -423,6 +423,47 @@ effective_len = base_len × (0.5 + audio_influence × sensitivity × 1.5)
 - 拖 GUI 到副屏 / 演出环境分离控制
 - 全屏 flock 时 GUI 不会盖住视觉
 
+## rp-44 — Granular 第 5 层（cluster 密度驱动颗粒云）
+
+**Commit**: `git tag rp-44-granular`
+
+**目的**：在 wind / drone / event 之外加第 5 个 audio layer。颗粒采样云
+随 cluster 数量"涨潮 / 退潮"——粒子聚集越多颗粒越密，给系统多一层
+"自然纹理"。
+
+**新文件**：无（全部加在 Synth.h/cpp 里）
+
+**架构**：
+- Setup 时合成 4 秒"3 detuned sine + 慢 LFO + 微弱噪声"作为源 buffer
+  （自包含，不依赖外部 wav 文件）
+- 16 grain pool，每个 grain 有 readPos / age / length / pitch / pan
+- 每 grain = Hann 窗口化片段，可 pitch shift（线性插值读源）
+- 触发率 = `grainBaseRate + clusterCount × granClusterInfluence`
+  - 默认 4 Hz base + 6 Hz/cluster → 0 cluster 4Hz / 4 cluster 28Hz
+- 总音量受 conductor staging（stageDroneV：mid 段进场）+ granVolSmooth 平滑
+
+**新 GUI 区 (Granular)**:
+- vol / grain size / base rate / cluster influence / pitch spread / pan spread
+- 实时显示当前 cluster 数 + active grains
+
+**新接口**：
+- `Synth::setClusterCount(int)` 主线程每帧推 cluster 数
+- ofApp::update 在 updateClusterVoices 后调用
+
+**信号流位置**：在 Wind 之后 / Hall Reverb 之前 → granular 进 reverb，
+带空间感
+
+## rp-43 — checkpoint：audio output smoothing baseline
+
+**Commit**: `git tag rp-43-smooth-baseline`
+
+回滚锚点。内含 rp-42 + 全套 per-sample audio 平滑：
+- cdrVol / svfFc / foldDrive / wndVol / evtVol per-sample 1-pole
+  SMOOTH coef 0.0003 (~50ms tau)
+- audio energy measurement 改纯 RMS + 1-pole coef 0.05 (~150ms tau)
+
+无功能新增，纯听感修复。
+
 ## rp-42 — Event vol 轻微 staging（60% floor）
 
 **Commit**: `git tag rp-42-event-vol-floor`
@@ -763,3 +804,5 @@ rp-34（ImGui ID fix）论文前版本
 
 想做一个spectromorphology sequencer 能够衔接自选的8个morphology并且loop
 以及你需要判断morphology是否可以衔接，
+
+rp-43-smooth-baseline` (5d9106c) 已推
