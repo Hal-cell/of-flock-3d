@@ -126,11 +126,15 @@ void Synth::buildGui(ofParameterGroup& group){
 	// 颗粒采样云：cluster 数高时密度增加；低能段被 conductor staging 压低音量
 	granGroup.setName("Granular");
 	granGroup.add(granVol.set("vol",                       0.3f,  0.0f, 1.0f));
-	granGroup.add(grainSizeMs.set("grain size (ms)",       80.0f, 20.0f, 300.0f));
-	granGroup.add(grainBaseRate.set("base rate (Hz)",       4.0f,  0.5f, 50.0f));
+	// 短 grain + 高频率 = "咔嗒"流；长 grain + 低频率 = 流畅 cloud
+	granGroup.add(grainSizeMs.set("grain size (ms)",       35.0f, 10.0f, 300.0f));
+	granGroup.add(grainBaseRate.set("base rate (Hz)",       8.0f,  0.5f, 50.0f));
 	granGroup.add(granClusterInfluence.set("cluster influence", 6.0f, 0.0f, 20.0f));
 	granGroup.add(grainPitchSpread.set("pitch spread (st)", 5.0f,  0.0f, 24.0f));
 	granGroup.add(grainPanSpread.set("pan spread",          0.6f,  0.0f, 1.0f));
+	// 包络 attack 占比：0.05 = 锐起音 + 长衰减（pluck/click 感）
+	//                  0.5 = 对称三角（≈ Hann，平滑无 transient）
+	granGroup.add(grainAttackFrac.set("attack frac",        0.08f, 0.02f, 0.5f));
 	group.add(granGroup);
 
 	// ─── Morphology Conductor 影响 ───
@@ -204,6 +208,8 @@ void Synth::drawImGui(){
 		ig::slider(granClusterInfluence, "%.1f Hz/cluster");
 		ig::slider(grainPitchSpread, "%.1f st");
 		ig::slider(grainPanSpread);
+		ig::slider(grainAttackFrac, "%.2f");
+		ImGui::TextDisabled("attack frac: 0.05 锐 pluck/click | 0.5 对称 Hann/平滑");
 		ImGui::TextDisabled("Effective rate = base + cluster × influence");
 		ImGui::TextDisabled("当前 cluster 数: %d   active grains: %d",
 		                    a_clusterCount.load(),
@@ -680,6 +686,9 @@ void Synth::audioOut(ofSoundBuffer& buffer){
 	float effGrainRate   = grainBaseRate.get() + (float)curClusters * granClusterInfluence.get();
 	if (effGrainRate < 0.01f) effGrainRate = 0.01f;
 	float samplesPerGrain = (float)sampleRate / effGrainRate;
+	float grainAttackF = ofClamp(grainAttackFrac.get(), 0.02f, 0.5f);
+	float invAttackF   = 1.0f / grainAttackF;
+	float invDecayF    = 1.0f / (1.0f - grainAttackF);
 
 	for (int i = 0; i < n; i++) {
 		float left = 0, right = 0;
@@ -902,9 +911,16 @@ void Synth::audioOut(ofSoundBuffer& buffer){
 				}
 				float frac = gr.readPos - (float)idx;
 				float s = grainSource[idx] * (1.0f - frac) + grainSource[idx + 1] * frac;
-				// Hann envelope
+				// 三角包络：可调 attack 比例 → "短 attack + 长 decay" = pluck/click
+				// attack 段（t < attackF）：env = t / attackF（线性 0→1）
+				// decay 段（t >= attackF）：env = 1 - (t - attackF) / (1 - attackF)（线性 1→0）
 				float t = (float)gr.age / (float)gr.length;
-				float env = 0.5f * (1.0f - cosf(2.0f * PI * t));
+				float env;
+				if (t < grainAttackF) {
+					env = t * invAttackF;
+				} else {
+					env = (1.0f - t) * invDecayF;
+				}
 				s *= env;
 				gL += s * gr.panL;
 				gR += s * gr.panR;

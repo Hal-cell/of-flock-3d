@@ -145,6 +145,7 @@ private:
 	ofParameter<float> granClusterInfluence; // cluster 数对触发率的影响 (0..1)
 	ofParameter<float> grainPitchSpread;     // 半音随机偏移
 	ofParameter<float> grainPanSpread;       // pan 随机度
+	ofParameter<float> grainAttackFrac;      // 包络 attack 占比（0.05=锐 pluck，0.5=对称 Hann 风）
 
 	// 主线程 → 音频线程：当前 cluster 数（为了 grain rate 调制）
 	std::atomic<int>   a_clusterCount{0};
