@@ -423,6 +423,24 @@ effective_len = base_len × (0.5 + audio_influence × sensitivity × 1.5)
 - 拖 GUI 到副屏 / 演出环境分离控制
 - 全屏 flock 时 GUI 不会盖住视觉
 
+## rp-42 — Event vol 轻微 staging（60% floor）
+
+**Commit**: `git tag rp-42-event-vol-floor`
+
+**用户需求微调**：rp-40 锁定 event vol 不动；rp-41 修了"听不见"问题。
+现在用户希望 event vol 在能量平缓时**稍轻**（更柔和的环境），但**不消失**。
+
+**实施**：
+- 新 stage `stageEvtVol {0.0, 1.0, sigmoid}`
+- `evtVolStaged = blendRange(energy, eventVol × 0.6, eventVol, ca)`
+  - 低能：60% × user vol
+  - 高能：100% × user vol
+  - amount=0：永远 = user vol（向后兼容）
+- audioOut 内 event sum 归一化用 evtVolStaged 替代 evtVol
+
+跟 modIndex floor (0.5x) + ratio 永远等用户值 一起，event 在低能段是
+"轻、暗、harmonic" 的 bell；高能段是"满、亮、metallic"的 bell。
+
 ## rp-41 — Event 永远可听见（撤回 ratio staging + modIndex 加 floor）
 
 **Commit**: `git tag rp-41-event-audibility`

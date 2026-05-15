@@ -552,7 +552,12 @@ void Synth::audioOut(ofSoundBuffer& buffer){
 	static const EnergyStage stageDroneV  {0.3f, 0.7f, 3};  // sigmoid，中段
 	static const EnergyStage stageCutoff  {0.2f, 0.9f, 2};  // log，慢慢开亮
 	static const EnergyStage stageFold    {0.5f, 1.0f, 1};  // exp，高能晚进金属感
+	static const EnergyStage stageEvtVol  {0.0f, 1.0f, 3};  // sigmoid，全程；event vol 60%..100%
 	// (FM modIndex stage 在 triggerCollision 使用)
+
+	// Event vol 微弱 staging（60% floor → 100%）：低能段 event 稍轻不消失
+	float evtVolStaged = stageEvtVol.blendRange(energy, eventVol.get() * 0.6f,
+	                                            eventVol.get(), condAmt);
 
 	// ─── 预算 SVF cutoff / resonance 系数（per-buffer，每 sample 不变）───
 	// stageCutoff: 200Hz (dark) → userCutoff，能量 0.2..0.9 慢慢开亮（log 曲线）
@@ -718,9 +723,9 @@ void Synth::audioOut(ofSoundBuffer& buffer){
 			eventSumL += voiceSample * vc.panL;
 			eventSumR += voiceSample * vc.panR;
 		}
-		// 归一化：除以 voice 数量
-		eventSumL *= evtVol * (2.0f / NUM_EVENT_VOICES);
-		eventSumR *= evtVol * (2.0f / NUM_EVENT_VOICES);
+		// 归一化：除以 voice 数量；用 staged event vol（60%..100% 区间）
+		eventSumL *= evtVolStaged * (2.0f / NUM_EVENT_VOICES);
+		eventSumR *= evtVolStaged * (2.0f / NUM_EVENT_VOICES);
 
 		// Event Wave Folder：sin(x · drive) 加密谐波（高能段事件更金属）
 		if (eventFoldActive) {
