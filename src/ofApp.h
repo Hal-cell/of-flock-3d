@@ -17,7 +17,8 @@ public:
 	void exit() override;
 	void keyPressed(int key) override;
 	void windowResized(int w, int h) override;
-	void dragEvent(ofDragInfo dragInfo) override;   // 拖 wav/aif/flac → 替换 granular 源
+	void dragEvent(ofDragInfo dragInfo) override;   // 主窗口拖拽：wav/aif/flac → 替换 granular 源
+	void dragEventGui(ofDragInfo& dragInfo);        // gui 窗口拖拽（main.cpp 注册到 fileDragEvent）
 
 	// 音频回调（ofSoundStream 自动每 buffer 调用一次）
 	void audioOut(ofSoundBuffer& buffer) override;

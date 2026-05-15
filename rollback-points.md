@@ -806,3 +806,5 @@ rp-34（ImGui ID fix）论文前版本
 以及你需要判断morphology是否可以衔接，
 
 rp-43-smooth-baseline` (5d9106c) 已推
+
+想把粒子改成菌丝效果，粒子和粒子之间会动态的生成连线

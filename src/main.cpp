@@ -42,6 +42,11 @@ int main(){
 	              app.get(),
 	              &ofApp::drawGui);
 
+	// 也让 gui window 接受拖拽（默认 ofApp::dragEvent 只在 main window 触发）
+	ofAddListener(guiWindow->events().fileDragEvent,
+	              app.get(),
+	              &ofApp::dragEventGui);
+
 	ofRunApp(mainWindow, app);
 	ofRunMainLoop();
 }

@@ -4,10 +4,10 @@
 	<masterVol>0.282</masterVol>
 	<droneVol>0</droneVol>
 	<voiceVol>0.7</voiceVol>
-	<reverbAmt>0.815</reverbAmt>
+	<reverbAmt>0.853</reverbAmt>
 	<rootFreq__Hz_>91.575</rootFreq__Hz_>
 	<scale>1</scale>
-	<eventVol>0.735</eventVol>
+	<eventVol>0.369</eventVol>
 	<decay__ms_>163.4</decay__ms_>
 	<hit_gain>0.5865</hit_gain>
 	<minMass>2.75</minMass>
@@ -35,7 +35,7 @@
 		<event_fold>0</event_fold>
 	</FM>
 	<ClusterDrone>
-		<vol>0.873</vol>
+		<vol>0.512</vol>
 		<attack__ms_>3052.81</attack__ms_>
 		<release__ms_>4876.79</release__ms_>
 		<detune>0.00791075</detune>
@@ -48,7 +48,7 @@
 	<reverbDamp>0.641934</reverbDamp>
 	<reverb_preDelay__ms_>5.68359</reverb_preDelay__ms_>
 	<Wind>
-		<vol>0.548</vol>
+		<vol>0.155</vol>
 		<cutoff__Hz_>1631.63</cutoff__Hz_>
 		<resonance>0.2</resonance>
 		<sensitivity>1</sensitivity>
@@ -60,4 +60,14 @@
 	<drone_glide__ms_>2427</drone_glide__ms_>
 	<conductor_amount>1</conductor_amount>
 	<audio_energy_gain>1</audio_energy_gain>
+	<Granular>
+		<vol>0.83</vol>
+		<grain_size__ms_>122</grain_size__ms_>
+		<base_rate__Hz_>135.9</base_rate__Hz_>
+		<cluster_influence>14.4</cluster_influence>
+		<pitch_spread__st_>11</pitch_spread__st_>
+		<pan_spread>0.575</pan_spread>
+		<attack_frac>0.12</attack_frac>
+		<pitch_offset__st_>14.7</pitch_offset__st_>
+	</Granular>
 </Synth>

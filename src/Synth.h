@@ -144,7 +144,8 @@ private:
 	ofParameter<float> grainSizeMs;          // 单 grain 时长 (ms)
 	ofParameter<float> grainBaseRate;        // 基础触发率 (grains/sec)
 	ofParameter<float> granClusterInfluence; // cluster 数对触发率的影响 (0..1)
-	ofParameter<float> grainPitchSpread;     // 半音随机偏移
+	ofParameter<float> grainPitchOffset;     // 中心音高偏移（半音，-24..+24，0=原速）
+	ofParameter<float> grainPitchSpread;     // 半音随机偏移（在 offset 两侧）
 	ofParameter<float> grainPanSpread;       // pan 随机度
 	ofParameter<float> grainAttackFrac;      // 包络 attack 占比（0.05=锐 pluck，0.5=对称 Hann 风）
 

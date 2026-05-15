@@ -25,9 +25,13 @@ void Synth::setup(int sr, int bs){
 	preDelayBuf.assign(preDelayBufLen, 0.0f);
 	preDelayWrite = 0;
 
-	// ─── Granular source: 默认合成 4 秒"3 detuned sine + 慢 LFO + 微弱噪声"───
-	// 自包含，不依赖外部 wav 文件；用户后续可拖拽 wav 替换
-	synthesizeDefaultGrainSource();
+	// ─── Granular source: 优先加载捆绑的 ChurchBells（FluCoMa Tremblay 包）───
+	// 找不到 → 回落到合成 drone，确保即使 data/ 缺文件也能跑
+	const std::string defaultSamplePath = ofToDataPath("Tremblay-CF-ChurchBells.wav", true);
+	if (!loadGrainSource(defaultSamplePath)) {
+		ofLogWarning("Synth") << "default sample not found, falling back to synthesized drone";
+		synthesizeDefaultGrainSource();
+	}
 }
 
 //--------------------------------------------------------------
@@ -63,20 +67,116 @@ void Synth::synthesizeDefaultGrainSource() {
 }
 
 void Synth::resetGrainSourceDefault() {
-	synthesizeDefaultGrainSource();
+	// 跟 setup() 同样的逻辑：先试 bundled ChurchBells，找不到才合成 drone
+	const std::string defaultSamplePath = ofToDataPath("Tremblay-CF-ChurchBells.wav", true);
+	if (!loadGrainSource(defaultSamplePath)) {
+		synthesizeDefaultGrainSource();
+	}
 }
 
+// ─── 内嵌的 WAV 解析（OF 0.12 没有 ofSoundFile）───
+// 只支持 PCM WAV：16-bit / 24-bit / 32-bit int / 32-bit float
+// 正常 ableton/audacity 导出的样本都能读
+namespace {
+
+struct WavData {
+	int sampleRate = 0;
+	int numChannels = 0;
+	std::vector<float> interleaved;   // -1..1 范围的 mono/stereo interleaved float
+};
+
+static uint32_t readLE32(const uint8_t* p) {
+	return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+static uint16_t readLE16(const uint8_t* p) {
+	return (uint16_t)p[0] | ((uint16_t)p[1] << 8);
+}
+
+static bool parseWav(const std::string& path, WavData& out) {
+	ofFile f(path, ofFile::ReadOnly, true);
+	if (!f.exists()) return false;
+	auto data = ofBufferFromFile(path, true).getData();
+	const uint8_t* buf = (const uint8_t*)data;
+	size_t size = ofBufferFromFile(path, true).size();
+	if (size < 44) return false;
+
+	if (buf[0] != 'R' || buf[1] != 'I' || buf[2] != 'F' || buf[3] != 'F') return false;
+	if (buf[8] != 'W' || buf[9] != 'A' || buf[10] != 'V' || buf[11] != 'E') return false;
+
+	// 走 chunk 找 fmt 和 data
+	size_t pos = 12;
+	uint16_t audioFormat = 0, numChannels = 0, bitsPerSample = 0;
+	uint32_t sampleRate = 0;
+	const uint8_t* dataPtr = nullptr;
+	size_t dataSize = 0;
+
+	while (pos + 8 <= size) {
+		char ckId[5] = {(char)buf[pos],(char)buf[pos+1],(char)buf[pos+2],(char)buf[pos+3],0};
+		uint32_t ckSize = readLE32(buf + pos + 4);
+		if (pos + 8 + ckSize > size) break;
+		if (std::string(ckId) == "fmt ") {
+			audioFormat   = readLE16(buf + pos + 8);
+			numChannels   = readLE16(buf + pos + 10);
+			sampleRate    = readLE32(buf + pos + 12);
+			bitsPerSample = readLE16(buf + pos + 22);
+		} else if (std::string(ckId) == "data") {
+			dataPtr  = buf + pos + 8;
+			dataSize = ckSize;
+		}
+		pos += 8 + ckSize + (ckSize & 1);   // chunk 对齐到偶数字节
+	}
+
+	if (!dataPtr || numChannels == 0 || sampleRate == 0) return false;
+
+	int bytesPerSample = bitsPerSample / 8;
+	if (bytesPerSample <= 0) return false;
+	int numSamples = (int)(dataSize / bytesPerSample);
+
+	out.sampleRate  = (int)sampleRate;
+	out.numChannels = (int)numChannels;
+	out.interleaved.resize(numSamples);
+
+	if (audioFormat == 1 && bitsPerSample == 16) {
+		const int16_t* p = (const int16_t*)dataPtr;
+		for (int i = 0; i < numSamples; i++) out.interleaved[i] = p[i] / 32768.0f;
+	} else if (audioFormat == 1 && bitsPerSample == 24) {
+		for (int i = 0; i < numSamples; i++) {
+			const uint8_t* s = dataPtr + i * 3;
+			int32_t v = (int32_t)((s[0]) | (s[1] << 8) | (s[2] << 16));
+			if (v & 0x800000) v |= 0xFF000000;   // sign-extend
+			out.interleaved[i] = (float)v / 8388608.0f;
+		}
+	} else if (audioFormat == 1 && bitsPerSample == 32) {
+		const int32_t* p = (const int32_t*)dataPtr;
+		for (int i = 0; i < numSamples; i++) out.interleaved[i] = p[i] / 2147483648.0f;
+	} else if (audioFormat == 3 && bitsPerSample == 32) {
+		const float* p = (const float*)dataPtr;
+		for (int i = 0; i < numSamples; i++) out.interleaved[i] = p[i];
+	} else {
+		return false;   // 不支持的格式
+	}
+	return true;
+}
+
+} // anon
+
 bool Synth::loadGrainSource(const std::string& path) {
-	ofSoundFile sf;
-	if (!sf.load(path)) {
-		ofLogError("Synth") << "loadGrainSource: failed to load " << path;
+	std::string ext = ofToLower(ofFilePath::getFileExt(path));
+	if (ext != "wav") {
+		ofLogError("Synth") << "loadGrainSource: only WAV supported in this build (got ." << ext << ")";
 		return false;
 	}
-	ofSoundBuffer buf;
-	sf.readTo(buf);
-	int srcSr = (int)buf.getSampleRate();
-	int numCh = (int)buf.getNumChannels();
-	int numFrames = (int)buf.getNumFrames();
+
+	WavData wav;
+	if (!parseWav(path, wav)) {
+		ofLogError("Synth") << "loadGrainSource: failed to parse WAV " << path
+		                    << " (only PCM 16/24/32-bit and 32-bit float supported)";
+		return false;
+	}
+
+	int srcSr = wav.sampleRate;
+	int numCh = wav.numChannels;
+	int numFrames = (int)(wav.interleaved.size() / std::max(1, numCh));
 	if (numFrames < 100) {
 		ofLogError("Synth") << "loadGrainSource: too short (" << numFrames << " frames)";
 		return false;
@@ -86,7 +186,7 @@ bool Synth::loadGrainSource(const std::string& path) {
 	std::vector<float> mono(numFrames);
 	for (int i = 0; i < numFrames; i++) {
 		float s = 0.0f;
-		for (int c = 0; c < numCh; c++) s += buf.getBuffer()[i * numCh + c];
+		for (int c = 0; c < numCh; c++) s += wav.interleaved[i * numCh + c];
 		mono[i] = s / (float)numCh;
 	}
 
@@ -206,9 +306,13 @@ void Synth::buildGui(ofParameterGroup& group){
 	granGroup.setName("Granular");
 	granGroup.add(granVol.set("vol",                       0.3f,  0.0f, 1.0f));
 	// 短 grain + 高频率 = "咔嗒"流；长 grain + 低频率 = 流畅 cloud
+	// base rate 200Hz 上限 → grain 重叠成连续纹理（5ms / grain 间隔）
 	granGroup.add(grainSizeMs.set("grain size (ms)",       35.0f, 10.0f, 300.0f));
-	granGroup.add(grainBaseRate.set("base rate (Hz)",       8.0f,  0.5f, 50.0f));
+	granGroup.add(grainBaseRate.set("base rate (Hz)",       8.0f,  0.5f, 200.0f));
 	granGroup.add(granClusterInfluence.set("cluster influence", 6.0f, 0.0f, 20.0f));
+	// 中心 pitch offset：所有 grain 都先按这个偏移移调，再叠加 spread 随机
+	// -12 = 下八度（拉长慢拷贝感），+12 = 上八度（加亮 chip 风），0 = 原速
+	granGroup.add(grainPitchOffset.set("pitch offset (st)", 0.0f, -24.0f, 24.0f));
 	granGroup.add(grainPitchSpread.set("pitch spread (st)", 5.0f,  0.0f, 24.0f));
 	granGroup.add(grainPanSpread.set("pan spread",          0.6f,  0.0f, 1.0f));
 	// 包络 attack 占比：0.05 = 锐起音 + 长衰减（pluck/click 感）
@@ -281,10 +385,11 @@ void Synth::drawImGui(){
 	}
 
 	if (ig::section("Granular (cluster-driven cloud)")) {
-		ig::slider(granVol);
+		ig::slider(granVol, "%.2f");
 		ig::slider(grainSizeMs, "%.0f ms");
 		ig::slider(grainBaseRate, "%.1f Hz");
 		ig::slider(granClusterInfluence, "%.1f Hz/cluster");
+		ig::slider(grainPitchOffset, "%+.1f st");
 		ig::slider(grainPitchSpread, "%.1f st");
 		ig::slider(grainPanSpread);
 		ig::slider(grainAttackFrac, "%.2f");
@@ -300,7 +405,34 @@ void Synth::drawImGui(){
 		}
 		ImGui::TextColored(ImVec4(0.6f, 0.85f, 1.0f, 1.0f),
 		                   "source: %s", srcName.c_str());
-		ImGui::TextDisabled("拖 wav/aif/flac 到主窗口替换 granular 源");
+
+		// ─── 专用 drop zone（拖文件到这片区域，或这个 GUI 窗口任何位置）───
+		// 视觉指示，实际 drop handler 在 ofApp::dragEventGui 全窗口生效
+		ImGui::Spacing();
+		ImGui::PushStyleColor(ImGuiCol_ChildBg,  ImVec4(0.15f, 0.22f, 0.32f, 0.55f));
+		ImGui::PushStyleColor(ImGuiCol_Border,   ImVec4(0.45f, 0.65f, 0.95f, 0.65f));
+		ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 1.5f);
+		ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 6.0f);
+		ImGui::BeginChild("granular_dropzone", ImVec2(-1, 64), true);
+		{
+			const char* line1 = "DROP  .WAV  HERE";
+			const char* line2 = "(or anywhere on this control window)";
+			ImVec2 avail = ImGui::GetContentRegionAvail();
+			ImVec2 sz1 = ImGui::CalcTextSize(line1);
+			ImVec2 sz2 = ImGui::CalcTextSize(line2);
+			float totalH = sz1.y + sz2.y + 4.0f;
+			float yStart = (avail.y - totalH) * 0.5f;
+			if (yStart < 0) yStart = 0;
+			ImGui::SetCursorPosY(ImGui::GetCursorPosY() + yStart);
+			ImGui::SetCursorPosX((avail.x - sz1.x) * 0.5f);
+			ImGui::TextColored(ImVec4(0.85f, 0.93f, 1.0f, 0.95f), "%s", line1);
+			ImGui::SetCursorPosX((avail.x - sz2.x) * 0.5f);
+			ImGui::TextColored(ImVec4(0.65f, 0.75f, 0.90f, 0.75f), "%s", line2);
+		}
+		ImGui::EndChild();
+		ImGui::PopStyleVar(2);
+		ImGui::PopStyleColor(2);
+
 		if (ImGui::Button("Reset to default source")) {
 			resetGrainSourceDefault();
 		}
@@ -977,12 +1109,17 @@ void Synth::audioOut(ofSoundBuffer& buffer){
 					grains[g].age = 0;
 					grains[g].length = (int)(grainSizeMs.get() * 0.001f * sampleRate);
 					if (grains[g].length < 1) grains[g].length = 1;
-					// 随机 pitch（[-spread, +spread] 半音）
-					float spread = grainPitchSpread.get();
-					float pitchSemi = (((float)std::rand() / (float)RAND_MAX) * 2.0f - 1.0f) * spread;
+					// pitch = 中心 offset + 随机 [-spread, +spread] 半音
+					float offset   = grainPitchOffset.get();
+					float spread   = grainPitchSpread.get();
+					float jitter   = (((float)std::rand() / (float)RAND_MAX) * 2.0f - 1.0f) * spread;
+					float pitchSemi = offset + jitter;
 					grains[g].pitch = powf(2.0f, pitchSemi / 12.0f);
 					// 随机源位置（确保有完整 grain length 可读）
-					int maxStart = grainSourceLen - grains[g].length * 3;
+					// 高 pitch 时一个 grain 会读 length × pitch 个 source sample
+					// → 用 ceil(pitch + 1) 当 safety margin（高 pitch 也不会提前截断）
+					int marginMul = std::max(2, (int)std::ceil(grains[g].pitch + 1.0f));
+					int maxStart = grainSourceLen - grains[g].length * marginMul;
 					if (maxStart < 1) maxStart = 1;
 					grains[g].readPos = (float)(std::rand() % maxStart);
 					// 随机 pan

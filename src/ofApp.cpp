@@ -375,20 +375,30 @@ void ofApp::windowResized(int w, int h){
 }
 
 //==============================================================
-//  Drag & drop — 拖 audio 文件进主窗口 → 换 granular 源
+//  Drag & drop — 拖 wav 文件进任一窗口 → 换 granular 源
+//  （当前只支持 .wav；ofDragInfo.files 是 of::filesystem::path 列表）
 //==============================================================
-void ofApp::dragEvent(ofDragInfo dragInfo){
-	if (dragInfo.files.empty()) return;
-
-	for (const auto& path : dragInfo.files) {
+static bool tryLoadDroppedAudio(Synth& synth, const std::vector<of::filesystem::path>& files) {
+	for (const auto& p : files) {
+		std::string path = p.string();
 		std::string ext = ofToLower(ofFilePath::getFileExt(path));
-		if (ext == "wav" || ext == "aif" || ext == "aiff" || ext == "flac") {
-			bool ok = synth.loadGrainSource(path);
-			if (ok) {
-				ofLogNotice() << "granular source ← " << ofFilePath::getFileName(path);
-				return;   // 用第一个能加载的
+		if (ext == "wav") {
+			if (synth.loadGrainSource(path)) {
+				ofLogNotice() << "granular source <- " << ofFilePath::getFileName(path);
+				return true;
 			}
 		}
 	}
-	ofLogWarning() << "drag: no usable audio file (wav/aif/flac)";
+	ofLogWarning() << "drag: no usable WAV file";
+	return false;
+}
+
+void ofApp::dragEvent(ofDragInfo dragInfo){
+	if (dragInfo.files.empty()) return;
+	tryLoadDroppedAudio(synth, dragInfo.files);
+}
+
+void ofApp::dragEventGui(ofDragInfo& dragInfo){
+	if (dragInfo.files.empty()) return;
+	tryLoadDroppedAudio(synth, dragInfo.files);
 }
