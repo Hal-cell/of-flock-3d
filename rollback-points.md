@@ -423,6 +423,42 @@ effective_len = base_len × (0.5 + audio_influence × sensitivity × 1.5)
 - 拖 GUI 到副屏 / 演出环境分离控制
 - 全屏 flock 时 GUI 不会盖住视觉
 
+## rp-37 — Per-parameter EnergyStage（编排式响应，错峰进场）
+
+**Commit**: `git tag rp-37-energy-stages`
+
+**论文背景**：之前 rp-35/36 用**统一 scalar** 喷所有 audio 参数。这是粗暴的，
+论文 Spectromorphology 要求每个参数有自己的响应曲线 —— 风声铺底要早进，
+drone vol 中段进，FM 金属感留高能段。
+
+**新文件**：
+- `src/EnergyStage.h` —— 共享 helper 类。
+
+```cpp
+struct EnergyStage {
+    float activationStart, activationEnd;  // 激活窗口
+    int   curve;                            // 0=linear, 1=exp, 2=log, 3=sigmoid
+    float stageOf(energy)        → 0..1 进场强度
+    float blend(energy, userVal, ca) → userVal × (1 - ca + ca × stage)
+};
+```
+
+**Synth 编排表**：
+| 参数 | 窗口 | 曲线 | 进场时机 |
+|---|---|---|---|
+| wind vol  | 0.0 – 0.5 | sigmoid | 最早，铺底 |
+| drone vol | 0.3 – 0.7 | sigmoid | 中段，主旋律 |
+| cutoff    | 0.2 – 0.9 | log     | 慢慢开亮 |
+| FM modIndex | 0.5 – 1.0 | exp   | 晚进，高能段金属感 |
+| drone fold  | 0.5 – 1.0 | exp   | 晚进，西海岸 noise |
+
+**向后兼容**：`conductorAmount = 0`（默认）→ 输出永远 = userValue，行为完全
+等于 rp-36。`conductorAmount = 1` 才完全用 stage 编排。中间值平滑过渡。
+
+**用户体验改动**：开启 conductorAmount=1 后，conductor=0.5（baseline）不再
+是"用户全部 slider 值"，而是"中段编排"（wind 满 + drone 50% + cutoff 75%
++ FM 0% + fold 0%）。这是有意的，是"编排"的代价。
+
 ## rp-36 — Synchresis 自感知 + 周期 cadence（系统的"agency"）
 
 **Commit**: `git tag rp-36-synchresis`

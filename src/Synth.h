@@ -2,6 +2,7 @@
 
 #include "ofMain.h"
 #include "Flock3D.h"
+#include "EnergyStage.h"
 #include <atomic>
 #include <array>
 

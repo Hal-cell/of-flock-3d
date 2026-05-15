@@ -232,12 +232,15 @@ void Synth::triggerCollision(const Flock3D::CollisionEvent& ev){
 	// Accent 命中时也让 modIndex 增加（更明亮的重音）
 	if (ev.isAccent) modIndexInit *= 1.5f;
 
-	// Morphology Conductor 调制（论文 Spectromorphological Synchresis）：
-	// conductor 0..1 → modIndex 在 (1-amount) .. (1+amount) 之间缩放
-	float ca = conductorAmount.get();
-	float cv = a_conductorValue.load();
-	float conductorScalar = 1.0f + (cv - 0.5f) * 2.0f * ca;
-	modIndexInit *= conductorScalar;
+	// FM modIndex 编排：金属感留给高能段（论文 Spectromorphology"node→noise"过渡）
+	// stageFM: 能量 0.5..1.0 段从 modIndex×0 增到 modIndex×1
+	{
+		static const EnergyStage stageFM {0.5f, 1.0f, 1};  // exp，晚进
+		float ca = conductorAmount.get();
+		float cv = a_conductorValue.load();
+		float energy = 0.5f * (1.0f - ca) + cv * ca;
+		modIndexInit = stageFM.blend(energy, modIndexInit, ca);
+	}
 
 	// modIndex 衰减（独立于 carrier）
 	// Tail 调制：tail 长度 × depth × 400ms 加到 base idxDecay 上（正相关）
@@ -532,16 +535,11 @@ void Synth::audioOut(ofSoundBuffer& buffer){
 	//   - cluster drone vol  （持续层，cluster 存在时听到）
 	//   - drone cutoff       （音色亮度）
 	//   - FM modIndex        （事件音色亮度，在 triggerCollision 内处理）
-	float audioCondScalar;
-	{
-		float ca = conductorAmount.get();
-		float cv = a_conductorValue.load();
-		audioCondScalar = 1.0f + (cv - 0.5f) * 2.0f * ca;
-	}
-
 	// ─── 预算 SVF cutoff / resonance 系数（per-buffer，每 sample 不变）───
+	// stageCutoff: 200Hz (dark) → userCutoff，能量 0.2..0.9 慢慢开亮（log 曲线）
 	float baseCutoff = ofClamp(clusterCutoff.get(), 20.0f, sampleRate * 0.4f);
-	float cutoff = ofClamp(baseCutoff * audioCondScalar, 20.0f, sampleRate * 0.4f);
+	float cutoff = ofClamp(stageCutoff.blendRange(energy, 200.0f, baseCutoff, condAmt),
+	                       20.0f, sampleRate * 0.4f);
 	float svfFc = 2.0f * sinf(PI * cutoff / sampleRate);
 	if (svfFc > 0.99f) svfFc = 0.99f;
 	float svfQ  = 1.0f - ofClamp(clusterResonance.get(), 0.0f, 0.95f);
@@ -563,17 +561,35 @@ void Synth::audioOut(ofSoundBuffer& buffer){
 	float glideCoef = 3.0f / std::max(1.0f, glideSamples);
 	if (glideCoef > 1.0f) glideCoef = 1.0f;
 
-	// ─── Drone Wave Folder（西海岸合成派，加谐波不加幅度）───
-	// effFold = base × audioCondScalar → conductor 高时 fold 自动加深
-	// drive ∈ [1..6]，drive=1 → 几乎不变，drive=6 → 多次折叠（极金属）
-	// 用 sin(x · drive) 实现：天然 ∈ [-1,1]，无 clip 风险
-	float effFold = ofClamp(clusterDroneFold.get() * audioCondScalar, 0.0f, 1.0f);
+	// ─── EnergyStage 编排式响应（rp-37）───
+	// 不再用统一 scalar 喷所有参数。每个参数有自己的激活窗口 + 曲线 ——
+	// 论文 Spectromorphology 的"参数在能量轴上错峰进场"。
+	// energy = 在 conductorAmount 控制下，conductor.value 跟 0.5 之间的混合
+	float energy;
+	{
+		float cv = a_conductorValue.load();
+		float ca = conductorAmount.get();
+		energy = 0.5f * (1.0f - ca) + cv * ca;
+	}
+	float condAmt = conductorAmount.get();
+
+	// 预设激活窗口（论文式编排：风铺底 → drone 中段 → cutoff/fold/FM 留高能段）
+	static const EnergyStage stageWind    {0.0f, 0.5f, 3};  // sigmoid，最早进
+	static const EnergyStage stageDroneV  {0.3f, 0.7f, 3};  // sigmoid，中段
+	static const EnergyStage stageCutoff  {0.2f, 0.9f, 2};  // log，慢慢开亮
+	static const EnergyStage stageFold    {0.5f, 1.0f, 1};  // exp，高能晚进金属感
+	// (FM modIndex stage 在 triggerCollision 使用)
+
+	// ─── Drone Wave Folder ───
+	// 用 stageFold 编排，fold 只在高能段（energy > 0.5）开始展开
+	float baseFold  = clusterDroneFold.get();
+	float effFold   = stageFold.blend(energy, baseFold, condAmt);
 	float foldDrive = 1.0f + effFold * 5.0f;
 	bool foldActive = effFold > 0.001f;
 
 	// ─── 预算 Wind 层参数（per-buffer，每 sample 不变）───
-	// 用 audioCondScalar 缩放音量 → conductor ascent 时 wind 越来越响（最直接听感）
-	float wndVol = windVol * audioCondScalar;                                  // 独立音量
+	// stageWind：风声 0..0.5 能量段就饱和（铺底纹理，最先进场）
+	float wndVol = stageWind.blend(energy, windVol.get(), condAmt);
 	float wndCutoffBase = ofClamp(windCutoff.get(), 50.0f, sampleRate * 0.4f); // base cutoff
 	float wndQ = 1.0f - ofClamp(windResonance.get(), 0.0f, 0.95f);
 	if (wndQ < 0.05f) wndQ = 0.05f;
@@ -590,8 +606,8 @@ void Synth::audioOut(ofSoundBuffer& buffer){
 		// A. Cluster Drone — 多声部，每 voice = 3 detuned saw + SVF lowpass
 		// ───────────────────────────────
 		{
-			// conductor 缩放 drone 音量（cluster 存在时听感最直接）
-			float cdrVol = clusterDroneVol * audioCondScalar;
+			// stageDroneV: drone 在能量 0.3..0.7 段渐入（sigmoid，中段乐器）
+			float cdrVol = stageDroneV.blend(energy, clusterDroneVol.get(), condAmt);
 			float cdrSumL = 0, cdrSumR = 0;
 			for (int v = 0; v < NUM_DRONE_VOICES; v++) {
 				auto& dv = droneVoices[v];
