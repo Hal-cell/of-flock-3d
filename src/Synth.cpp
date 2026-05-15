@@ -510,8 +510,8 @@ void Synth::updateClusterVoices(const std::vector<Flock3D::Cluster>& clusters, f
 
 	// ─── Pass 2: 没匹配上的活 voice → fadeout（时间精准）───
 	// 用实际 frame time 而不是假设 60fps，避免帧率波动让 audio 还没到 0 就被切断
-	float dt = ofGetLastFrameTime();
-	if (dt > 0.1f) dt = 0.1f;
+	// （dt 已在函数顶部声明，给 chord progression 用；这里 cap 一下）
+	float dtSafe = (dt > 0.1f) ? 0.1f : dt;
 	float releaseSec = clusterReleaseMs.get() * 0.001f;
 	// 多给 5% 余量，确保音频侧 envelope 真的到 0 后才释放 voice
 	float releaseWithMargin = releaseSec * 1.05f;
@@ -525,7 +525,7 @@ void Synth::updateClusterVoices(const std::vector<Flock3D::Cluster>& clusters, f
 			droneVoices[i].targetVol.store(0.0f);
 			droneTracking[i].fadeoutSec = releaseWithMargin;
 		} else {
-			droneTracking[i].fadeoutSec -= dt;
+			droneTracking[i].fadeoutSec -= dtSafe;
 			if (droneTracking[i].fadeoutSec <= 0.0f) {
 				// 完全淡出 → 释放（此时 audio envelope 已严格归零，无 cliff）
 				droneTracking[i].active = false;
