@@ -527,14 +527,25 @@ void Synth::audioOut(ofSoundBuffer& buffer){
 	}
 	ringRead.store(r, std::memory_order_release);
 
-	// ─── Morphology Conductor 调制（per-buffer，audio thread 安全 atomic load）───
-	// 论文 Spectromorphological Synchresis：conductor 曲线在 buffer 起始 sample 一次
-	// 缩放整个 audio 侧的"亮度+音量"复合指标。
-	// 影响：
-	//   - wind volume        （持续层，音量变化最直接听到）
-	//   - cluster drone vol  （持续层，cluster 存在时听到）
-	//   - drone cutoff       （音色亮度）
-	//   - FM modIndex        （事件音色亮度，在 triggerCollision 内处理）
+	// ─── EnergyStage 编排式响应（rp-37）───
+	// 不再用统一 scalar 喷所有参数。每个参数有自己的激活窗口 + 曲线 ——
+	// 论文 Spectromorphology 的"参数在能量轴上错峰进场"。
+	// energy = 在 conductorAmount 控制下，conductor.value 跟 0.5 之间的混合
+	float energy;
+	{
+		float cv = a_conductorValue.load();
+		float ca = conductorAmount.get();
+		energy = 0.5f * (1.0f - ca) + cv * ca;
+	}
+	float condAmt = conductorAmount.get();
+
+	// 预设激活窗口（论文式编排：风铺底 → drone 中段 → cutoff/fold/FM 留高能段）
+	static const EnergyStage stageWind    {0.0f, 0.5f, 3};  // sigmoid，最早进
+	static const EnergyStage stageDroneV  {0.3f, 0.7f, 3};  // sigmoid，中段
+	static const EnergyStage stageCutoff  {0.2f, 0.9f, 2};  // log，慢慢开亮
+	static const EnergyStage stageFold    {0.5f, 1.0f, 1};  // exp，高能晚进金属感
+	// (FM modIndex stage 在 triggerCollision 使用)
+
 	// ─── 预算 SVF cutoff / resonance 系数（per-buffer，每 sample 不变）───
 	// stageCutoff: 200Hz (dark) → userCutoff，能量 0.2..0.9 慢慢开亮（log 曲线）
 	float baseCutoff = ofClamp(clusterCutoff.get(), 20.0f, sampleRate * 0.4f);
@@ -560,25 +571,6 @@ void Synth::audioOut(ofSoundBuffer& buffer){
 	float glideSamples = glideMs * 0.001f * sampleRate;
 	float glideCoef = 3.0f / std::max(1.0f, glideSamples);
 	if (glideCoef > 1.0f) glideCoef = 1.0f;
-
-	// ─── EnergyStage 编排式响应（rp-37）───
-	// 不再用统一 scalar 喷所有参数。每个参数有自己的激活窗口 + 曲线 ——
-	// 论文 Spectromorphology 的"参数在能量轴上错峰进场"。
-	// energy = 在 conductorAmount 控制下，conductor.value 跟 0.5 之间的混合
-	float energy;
-	{
-		float cv = a_conductorValue.load();
-		float ca = conductorAmount.get();
-		energy = 0.5f * (1.0f - ca) + cv * ca;
-	}
-	float condAmt = conductorAmount.get();
-
-	// 预设激活窗口（论文式编排：风铺底 → drone 中段 → cutoff/fold/FM 留高能段）
-	static const EnergyStage stageWind    {0.0f, 0.5f, 3};  // sigmoid，最早进
-	static const EnergyStage stageDroneV  {0.3f, 0.7f, 3};  // sigmoid，中段
-	static const EnergyStage stageCutoff  {0.2f, 0.9f, 2};  // log，慢慢开亮
-	static const EnergyStage stageFold    {0.5f, 1.0f, 1};  // exp，高能晚进金属感
-	// (FM modIndex stage 在 triggerCollision 使用)
 
 	// ─── Drone Wave Folder ───
 	// 用 stageFold 编排，fold 只在高能段（energy > 0.5）开始展开
@@ -845,12 +837,12 @@ void Synth::audioOut(ofSoundBuffer& buffer){
 	}
 	float rms = sqrtf(sumSq / std::max(n, 1));
 	float combined = std::max(rms, peak * 0.5f);     // peak 经 0.5 缩放跟 RMS 同量级
-	float energy = (combined * audioEnergyGain.get()) / 0.08f;
-	if (energy > 1.0f) energy = 1.0f;
-	if (energy < 0.0f) energy = 0.0f;
+	float measuredE = (combined * audioEnergyGain.get()) / 0.08f;
+	if (measuredE > 1.0f) measuredE = 1.0f;
+	if (measuredE < 0.0f) measuredE = 0.0f;
 	// 1-pole smoothing：避免短时震荡（音频线程写主线程读，atomic 保安全）
 	float prev = a_audioEnergyMeasured.load(std::memory_order_relaxed);
-	float smoothed = prev * 0.85f + energy * 0.15f;
+	float smoothed = prev * 0.85f + measuredE * 0.15f;
 	a_audioEnergyMeasured.store(smoothed, std::memory_order_relaxed);
 }
 
