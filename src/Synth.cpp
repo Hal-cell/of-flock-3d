@@ -81,6 +81,11 @@ void Synth::buildGui(ofParameterGroup& group){
 	// Wave folder（西海岸合成派）：sin(x · drive) 形式，加谐波不加幅度
 	// conductor 上升时也会自动加深（× audioCondScalar），让 spectrum 跟能量轨迹绑定
 	clusterDroneGroup.add(clusterDroneFold.set("fold",        0.0f,   0.0f,  1.0f));
+	// Chord Progression（rp-43）：energy 激增→平静时切换和弦
+	clusterDroneGroup.add(enableChordProgression.set("chord progression", false));
+	clusterDroneGroup.add(chordChangeHigh.set("chord trigger high", 0.7f, 0.5f, 1.0f));
+	clusterDroneGroup.add(chordChangeLow.set("chord trigger low",  0.3f, 0.0f, 0.5f));
+	clusterDroneGroup.add(chordMinIntervalSec.set("chord min interval (s)", 5.0f, 0.5f, 30.0f));
 	group.add(clusterDroneGroup);
 
 	// ─── Wind 子组（持续滤波噪声；field amp → cutoff）───
@@ -147,6 +152,15 @@ void Synth::drawImGui(){
 		ig::slider(clusterResonance);
 		ig::slider(clusterDroneFold);
 		ImGui::TextDisabled("fold 加深 → 谐波丰富但幅度不变；conductor 高时自动加深");
+
+		ImGui::Separator();
+		ImGui::TextDisabled("Chord Progression");
+		ig::check(enableChordProgression);
+		ig::slider(chordChangeHigh);
+		ig::slider(chordChangeLow);
+		ig::slider(chordMinIntervalSec, "%.1f s");
+		ImGui::TextColored(ImVec4(0.85f, 0.7f, 0.4f, 1.0f),
+		                   "current chord: %d / 4", currentChordIdx + 1);
 	}
 
 	if (ig::section("Wind")) {
@@ -365,6 +379,38 @@ int Synth::pickFreshSemitone() const {
 void Synth::updateClusterVoices(const std::vector<Flock3D::Cluster>& clusters, float wr){
 	a_worldRadius.store(wr);
 
+	// ─── Chord Progression: peak-then-calm 检测 → 切换 chord（rp-43）───
+	// energy 升过 chordChangeHigh → 进入"激增"；再落到 chordChangeLow → 触发切换
+	// chordMinIntervalSec 防过密
+	float dt = ofGetLastFrameTime();
+	secSinceLastChord += dt;
+	if (enableChordProgression.get()) {
+		float energyForChord = a_conductorValue.load();   // 直接读 conductor，不要 conductor amount 调制
+		if (!peakWasAbove && energyForChord > chordChangeHigh.get()) {
+			peakWasAbove = true;
+		} else if (peakWasAbove
+		           && energyForChord < chordChangeLow.get()
+		           && secSinceLastChord >= chordMinIntervalSec.get())
+		{
+			// Peak-then-calm 触发 → 推进 chord
+			currentChordIdx = (currentChordIdx + 1) % 4;
+			peakWasAbove = false;
+			secSinceLastChord = 0.0f;
+
+			// 把所有活 voice 的 targetFreq 更新到新 chord（glideMs 平滑过渡）
+			for (int i = 0; i < NUM_DRONE_VOICES; i++) {
+				if (!droneTracking[i].active) continue;
+				int chordSemi = CHORD_TEMPLATES[currentChordIdx][i];
+				float candFreq = rootFreq * powf(2.0f, chordSemi / 12.0f);
+				float newFreq  = quantizeToScale(candFreq);
+				int   newSemi  = (int)roundf(12.0f * log2f(newFreq / rootFreq));
+				droneTracking[i].semitone = newSemi;
+				droneVoices[i].targetFreq.store(newFreq);
+				// currentFreq 不重置 → 音频线程 glideCoef 平滑
+			}
+		}
+	}
+
 	// ─── Scale 切换检测：所有活 voice 重新对齐到新 scale（保留 currentFreq → 自动 glide）───
 	int curScale = scaleType.get();
 	if (curScale != lastScaleType) {
@@ -423,8 +469,18 @@ void Synth::updateClusterVoices(const std::vector<Flock3D::Cluster>& clusters, f
 
 		if (isNewVoice) {
 			// 新 voice：用和声优先级分配未占用的半音
+			//   - chord progression 启用 → 直接用 chord template[voice slot] 的 semi
+			//   - 否则用 pickFreshSemitone()（保留 rp-08 的 chord-priority 启发式）
 			tr.active = true;
-			int semi = pickFreshSemitone();
+			int semi;
+			if (enableChordProgression.get()) {
+				int chordSemi = CHORD_TEMPLATES[currentChordIdx][bestIdx];
+				float candFreq = rootFreq * powf(2.0f, chordSemi / 12.0f);
+				float qFreq = quantizeToScale(candFreq);
+				semi = (int)roundf(12.0f * log2f(qFreq / rootFreq));
+			} else {
+				semi = pickFreshSemitone();
+			}
 			tr.semitone = semi;
 			float freq = rootFreq * powf(2.0f, semi / 12.0f);
 

@@ -423,6 +423,50 @@ effective_len = base_len × (0.5 + audio_influence × sensitivity × 1.5)
 - 拖 GUI 到副屏 / 演出环境分离控制
 - 全屏 flock 时 GUI 不会盖住视觉
 
+## rp-43 — Drone Chord Progression（peak→calm 触发，voice-leading 衔接）
+
+**Commit**: `git tag rp-43-chord-progression`
+
+**用户需求**：drone 不应该永远停在一个和弦。每次能量激增之后的平静片段
+应该切换到下一个 chord，且 chord 之间要有 voice-leading 的连接关系。
+
+**实施**：
+
+1. **4 个 chord template**（手工设计的 voice-leading 序列）：
+   - I:    [0, 7, 12, 19]   root, 5th, oct, 5+oct
+   - I-2:  [0, 7, 14, 19]   voice 2 上移 +2（小变化）
+   - IV:   [0, 5, 14, 19]   voice 1 下移 -2（→ 4 度）
+   - VI:   [3, 5, 14, 19]   voice 0 上移 +3（→ b3）
+   - 每次切换只动 1 个 voice 1-3 半音 → 自然 voice leading
+   - 实际播放时 quantizeToScale 贴回当前 scale
+
+2. **Peak-then-calm 检测**（在 updateClusterVoices 内）：
+   ```
+   if (energy > chordChangeHigh): peakWasAbove = true
+   else if (peakWasAbove && energy < chordChangeLow && enough_time_passed):
+       advance chord
+   ```
+   - 默认阈值：高 0.7 / 低 0.3
+   - 默认最小间隔 5 秒（防 oscillation 模式过密切换）
+
+3. **新 chord 应用**：所有 active voice 的 `targetFreq` 同时更新到新 chord
+   位置 → 利用现有 `droneGlideMs`（默认 600ms）平滑过渡，不会硬切
+
+4. **新 voice 启动**：当 chord progression 启用时，新进入的 cluster
+   按 voice 槽位获取 chord 中对应位置的音；否则保持原 `pickFreshSemitone()`
+
+**新 GUI 控件**（Cluster Drone section 底部）：
+- `chord progression` checkbox（默认 OFF，向后兼容）
+- `chord trigger high` / `chord trigger low` 阈值
+- `chord min interval (s)` 防过密切换
+- 显示 `current chord: N / 4`
+
+**测试**：
+- 开 conductor amount=1 + score "Figure 2 Arc"（30s ascent → osc → descent）
+- 开 chord progression
+- ascent 阶段能量爬到 0.7 后触发标记，descent 落到 0.3 时切换到下一个 chord
+- 听 drone 从 chord 1 → 2 → 3 → 4 → 1 循环（voice 平滑滑动）
+
 ## rp-42 — Event vol 轻微 staging（60% floor）
 
 **Commit**: `git tag rp-42-event-vol-floor`

@@ -139,6 +139,26 @@ private:
 	ofParameter<float> clusterResonance;    // SVF resonance（0..0.95）
 	ofParameter<float> clusterDroneFold;    // wave fold 量（0..1）—— 加谐波不加幅度
 
+	// ─── Chord Progression（rp-43）───
+	// 能量激增→平静时切换 chord（4 个 chord template，voice-leading 设计）
+	ofParameter<bool>  enableChordProgression;
+	ofParameter<float> chordChangeHigh;     // peak 检测：energy > 此值 → 进入"激增"
+	ofParameter<float> chordChangeLow;      // peak 检测：energy < 此值 + 之前激增 → 触发切换
+	ofParameter<float> chordMinIntervalSec; // 两次切换最少间隔（秒），防过密
+	int   currentChordIdx = 0;
+	bool  peakWasAbove    = false;
+	float secSinceLastChord = 100.0f;       // 启动时允许立刻切（如果触发）
+
+	// 4 个 chord template，每个 = 4 voices 的 semitone 偏移（root 加几个半音）
+	// 设计原则：相邻 chord 之间每个 voice 仅移动小度数，自然 voice leading
+	// （quantizeToScale 会把这些值贴回当前 scale）
+	static constexpr int CHORD_TEMPLATES[4][4] = {
+		{ 0,  7, 12, 19},   // I:    1, 5, 8(oct), 12(5+oct)
+		{ 0,  7, 14, 19},   // I-2:  voice 2 上移 2 → 9 度
+		{ 0,  5, 14, 19},   // IV:   voice 1 下移 2 → 4 度
+		{ 3,  5, 14, 19},   // VI:   voice 0 上移 3 → b3
+	};
+
 	// ─── Cluster Drone Voice（polyphonic drone 池，saw + SVF lowpass）───
 	struct DroneVoice {
 		std::atomic<bool>  active     {false};
