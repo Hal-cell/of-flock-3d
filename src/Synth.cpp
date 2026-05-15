@@ -868,27 +868,23 @@ void Synth::audioOut(ofSoundBuffer& buffer){
 	}
 
 	// ─── 实测 audio 能量（给 Synchresis 自感知用）───
-	// 取 RMS + peak 二者取大，归一化到 [0..1]
-	// peak 抓 transient（FM 钟声 / accent 闪烁）；RMS 反映持续层（wind / drone）
-	// 实测：post-tanh 后默认 RMS 0.03-0.10，peak 0.05-0.20
-	// 用 0.08 作归一化分母 → 默认 master=0.5 设置下 energy 落到 0.5-1.0 区间
-	// 用户可用 audioEnergyGain (默认 1，可上 5) 再调整
+	// 只用 RMS（不再混 peak）：512 samples 的平均功率本质就平滑
+	// peak 是 transient (FM 事件)，会让 curve 颠簸，且每次 cluster merge 都跳一次
+	// → 跟 visual energy（20K 粒子均值）的平滑度对齐
+	// 归一化分母 0.08 + 用户可调 audioEnergyGain（默认 1，可上 5）
 	float sumSq = 0.0f;
-	float peak  = 0.0f;
 	for (int i = 0; i < n; i++) {
 		float mono = (buffer[i * ch + 0] + buffer[i * ch + 1]) * 0.5f;
 		sumSq += mono * mono;
-		float absV = fabsf(mono);
-		if (absV > peak) peak = absV;
 	}
 	float rms = sqrtf(sumSq / std::max(n, 1));
-	float combined = std::max(rms, peak * 0.5f);     // peak 经 0.5 缩放跟 RMS 同量级
-	float measuredE = (combined * audioEnergyGain.get()) / 0.08f;
+	float measuredE = (rms * audioEnergyGain.get()) / 0.08f;
 	if (measuredE > 1.0f) measuredE = 1.0f;
 	if (measuredE < 0.0f) measuredE = 0.0f;
-	// 1-pole smoothing：避免短时震荡（音频线程写主线程读，atomic 保安全）
+	// 1-pole smoothing 强化：coef 0.05（之前 0.15）→ tau ≈ 150ms（之前 ~50ms）
+	// 比 visual 那种"天然平均"差不多了
 	float prev = a_audioEnergyMeasured.load(std::memory_order_relaxed);
-	float smoothed = prev * 0.85f + measuredE * 0.15f;
+	float smoothed = prev * 0.95f + measuredE * 0.05f;
 	a_audioEnergyMeasured.store(smoothed, std::memory_order_relaxed);
 }
 
