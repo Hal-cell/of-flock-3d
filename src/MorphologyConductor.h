@@ -87,6 +87,10 @@ private:
 	float currentValue = 0.5f;
 	float currentPhase = 0.0f;
 
+	// 累积式振荡相位（避免改 oscRate 时相位整体跳变）
+	// 每帧 += 2π × oscRate × dt，mod 2π；rate 改了只影响往后的累积速率
+	float oscAccumPhase = 0.0f;
+
 	// Mode 切换的连续性 bridging：
 	// 切换瞬间记录 (上一帧实际输出 - 新 mode 当前 raw)，作为 offset
 	// 然后每帧乘 decay 衰减到 0 → 平滑过渡，无跳变

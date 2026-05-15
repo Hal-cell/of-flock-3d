@@ -797,6 +797,40 @@ Flock3D::Stats Flock3D::getStats() const {
 //    - 排除背景均匀分布的干扰 → 信噪比极高
 //    - 数量少（merge 多时几百，一般几十）→ 简单阈值就清晰
 //--------------------------------------------------------------
+//  getVisualEnergyMeasured —— "系统看见自己"
+//  返回 [0..1] 综合视觉能量，给 Synchresis 自感知用
+//
+//  composite = 0.4 × density + 0.4 × speedNorm + 0.2 × brightness
+//    - density:    alive / total particle count (0..1)
+//    - speedNorm:  mean particle speed / 200 (0..1，200 是磁数 ~ 满 field 速度)
+//    - brightness: mean color RGB 平均 (0..1)
+//--------------------------------------------------------------
+float Flock3D::getVisualEnergyMeasured() const {
+	if (particles.empty()) return 0.0f;
+
+	int aliveCount = 0;
+	float speedSum = 0.0f;
+	float briSum   = 0.0f;
+	for (const auto& p : particles) {
+		if (!p.alive) continue;
+		aliveCount++;
+		speedSum += glm::length(p.velocity);
+		briSum   += (p.color.r + p.color.g + p.color.b) * (1.0f / 3.0f);
+	}
+	if (aliveCount == 0) return 0.0f;
+
+	float density  = float(aliveCount) / float(particles.size());
+	float meanSpd  = speedSum / float(aliveCount);
+	float speedN   = meanSpd / 200.0f;
+	if (speedN > 1.0f) speedN = 1.0f;
+	float meanBri  = briSum / float(aliveCount);
+
+	float energy = 0.4f * density + 0.4f * speedN + 0.2f * meanBri;
+	if (energy < 0.0f) energy = 0.0f;
+	if (energy > 1.0f) energy = 1.0f;
+	return energy;
+}
+
 std::vector<Flock3D::Cluster> Flock3D::getClusters(int maxK) const {
 	int gridRes = clusterGridRes;
 	if (gridRes < 2) gridRes = 2;

@@ -79,6 +79,10 @@ public:
 	// 见 论文 Spectromorphological Synchresis 节
 	void setConductorValue(float v) { conductorValue = v; }
 
+	// 实测视觉能量 [0..1]：density × meanSpeed × meanBrightness 复合
+	// 给 Synchresis 自感知用（"系统看见自己"）
+	float getVisualEnergyMeasured() const;
+
 	// 提供 tail 长度归一化（0..1）给 Synth — 调制 FM idxDecay
 	// 用 base tail length（GUI slider 值）— 避免和 audio→tail 形成反馈循环
 	float getCurrentTailNormalized() const {

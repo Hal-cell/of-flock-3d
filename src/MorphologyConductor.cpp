@@ -36,6 +36,12 @@ void MorphologyConductor::trigger() {
 void MorphologyConductor::update(float dt) {
 	elapsedTime += dt;
 
+	// 累积振荡相位 — 当 oscRate 动态变化时不会引起相位跳变
+	// （旧实现 oscPhase = 2π·rate·elapsedTime 在 rate 改瞬间会让积累的 t × Δrate 全部叠到相位上）
+	oscAccumPhase += 2.0f * PI * oscRate.get() * dt;
+	while (oscAccumPhase >= 2.0f * PI) oscAccumPhase -= 2.0f * PI;
+	while (oscAccumPhase < 0.0f)       oscAccumPhase += 2.0f * PI;
+
 	Mode m = (Mode)mode.get();
 	float dur = phaseDuration.get();
 	float p = (dur > 0.001f) ? (elapsedTime / dur) : 0.0f;
@@ -96,8 +102,8 @@ void MorphologyConductor::update(float dt) {
 //==============================================================
 float MorphologyConductor::computeRawValue() const {
 	Mode m = (Mode)mode.get();
-	float oscPhase = 2.0f * PI * oscRate.get() * elapsedTime;
-	float oscVal   = oscDepth.get() * sinf(oscPhase);
+	// 用累积相位（update() 维护），避免改 oscRate 时相位跳变
+	float oscVal = oscDepth.get() * sinf(oscAccumPhase);
 
 	switch (m) {
 		case FREE:
@@ -128,7 +134,7 @@ float MorphologyConductor::computeRawValue() const {
 			float pcurve  = applyCurve(currentPhase);
 			float effDepth = depth * pcurve;
 			float center  = pcurve * (1.0f - effDepth);
-			return center + effDepth * sinf(oscPhase);
+			return center + effDepth * sinf(oscAccumPhase);
 		}
 
 		case DESCENT_OSC: {
@@ -140,7 +146,7 @@ float MorphologyConductor::computeRawValue() const {
 			float remaining = 1.0f - pcurve;
 			float effDepth  = depth * remaining;
 			float center    = remaining * (1.0f - effDepth);
-			return center + effDepth * sinf(oscPhase);
+			return center + effDepth * sinf(oscAccumPhase);
 		}
 
 		default:

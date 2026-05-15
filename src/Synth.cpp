@@ -47,6 +47,8 @@ void Synth::buildGui(ofParameterGroup& group){
 	group.add(scaleType.set("scale",             0, 0, int(SCALE_COUNT) - 1));
 	// 当 scale 切换时，drone voice 沿这个时长 glide 到新音高（ms）
 	group.add(droneGlideMs.set("drone glide (ms)", 600.0f, 5.0f, 4000.0f));
+	// 给 Synchresis 用的 audio energy 灵敏度（默认 1，audio 太静 → 调高）
+	group.add(audioEnergyGain.set("audio energy gain", 1.0f, 0.1f, 5.0f));
 
 	// ─── FM 子组（2-op：carrier + modulator）───
 	// 一些典型 ratio 玩法：
@@ -73,6 +75,9 @@ void Synth::buildGui(ofParameterGroup& group){
 	clusterDroneGroup.add(clusterProximity.set("proximity",   80.0f,  10.0f, 400.0f));
 	clusterDroneGroup.add(clusterCutoff.set("cutoff (Hz)",    600.0f, 80.0f, 8000.0f));
 	clusterDroneGroup.add(clusterResonance.set("resonance",   0.3f,   0.0f,  0.95f));
+	// Wave folder（西海岸合成派）：sin(x · drive) 形式，加谐波不加幅度
+	// conductor 上升时也会自动加深（× audioCondScalar），让 spectrum 跟能量轨迹绑定
+	clusterDroneGroup.add(clusterDroneFold.set("fold",        0.0f,   0.0f,  1.0f));
 	group.add(clusterDroneGroup);
 
 	// ─── Wind 子组（持续滤波噪声；field amp → cutoff）───
@@ -135,6 +140,8 @@ void Synth::drawImGui(){
 		ig::slider(clusterProximity, "%.1f");
 		ig::sliderLog(clusterCutoff, "%.0f Hz");
 		ig::slider(clusterResonance);
+		ig::slider(clusterDroneFold);
+		ImGui::TextDisabled("fold 加深 → 谐波丰富但幅度不变；conductor 高时自动加深");
 	}
 
 	if (ig::section("Wind")) {
@@ -556,6 +563,14 @@ void Synth::audioOut(ofSoundBuffer& buffer){
 	float glideCoef = 3.0f / std::max(1.0f, glideSamples);
 	if (glideCoef > 1.0f) glideCoef = 1.0f;
 
+	// ─── Drone Wave Folder（西海岸合成派，加谐波不加幅度）───
+	// effFold = base × audioCondScalar → conductor 高时 fold 自动加深
+	// drive ∈ [1..6]，drive=1 → 几乎不变，drive=6 → 多次折叠（极金属）
+	// 用 sin(x · drive) 实现：天然 ∈ [-1,1]，无 clip 风险
+	float effFold = ofClamp(clusterDroneFold.get() * audioCondScalar, 0.0f, 1.0f);
+	float foldDrive = 1.0f + effFold * 5.0f;
+	bool foldActive = effFold > 0.001f;
+
 	// ─── 预算 Wind 层参数（per-buffer，每 sample 不变）───
 	// 用 audioCondScalar 缩放音量 → conductor ascent 时 wind 越来越响（最直接听感）
 	float wndVol = windVol * audioCondScalar;                                  // 独立音量
@@ -628,6 +643,14 @@ void Synth::audioOut(ofSoundBuffer& buffer){
 			}
 			cdrSumL *= cdrVol * (2.0f / NUM_DRONE_VOICES);
 			cdrSumR *= cdrVol * (2.0f / NUM_DRONE_VOICES);
+
+			// Wave folder：sin(x · drive) 加密谐波（西海岸合成）
+			// 仅当 effFold > 0 才折，否则直通省 sinf 开销
+			if (foldActive) {
+				cdrSumL = sinf(cdrSumL * foldDrive);
+				cdrSumR = sinf(cdrSumR * foldDrive);
+			}
+
 			left  += cdrSumL;
 			right += cdrSumR;
 		}
@@ -789,6 +812,30 @@ void Synth::audioOut(ofSoundBuffer& buffer){
 		buffer[i * ch + 0] = left;
 		buffer[i * ch + 1] = right;
 	}
+
+	// ─── 实测 audio 能量（给 Synchresis 自感知用）───
+	// 取 RMS + peak 二者取大，归一化到 [0..1]
+	// peak 抓 transient（FM 钟声 / accent 闪烁）；RMS 反映持续层（wind / drone）
+	// 实测：post-tanh 后默认 RMS 0.03-0.10，peak 0.05-0.20
+	// 用 0.08 作归一化分母 → 默认 master=0.5 设置下 energy 落到 0.5-1.0 区间
+	// 用户可用 audioEnergyGain (默认 1，可上 5) 再调整
+	float sumSq = 0.0f;
+	float peak  = 0.0f;
+	for (int i = 0; i < n; i++) {
+		float mono = (buffer[i * ch + 0] + buffer[i * ch + 1]) * 0.5f;
+		sumSq += mono * mono;
+		float absV = fabsf(mono);
+		if (absV > peak) peak = absV;
+	}
+	float rms = sqrtf(sumSq / std::max(n, 1));
+	float combined = std::max(rms, peak * 0.5f);     // peak 经 0.5 缩放跟 RMS 同量级
+	float energy = (combined * audioEnergyGain.get()) / 0.08f;
+	if (energy > 1.0f) energy = 1.0f;
+	if (energy < 0.0f) energy = 0.0f;
+	// 1-pole smoothing：避免短时震荡（音频线程写主线程读，atomic 保安全）
+	float prev = a_audioEnergyMeasured.load(std::memory_order_relaxed);
+	float smoothed = prev * 0.85f + energy * 0.15f;
+	a_audioEnergyMeasured.store(smoothed, std::memory_order_relaxed);
 }
 
 //==============================================================

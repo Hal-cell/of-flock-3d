@@ -1,0 +1,8 @@
+<?xml version="1.0"?>
+<Synchresis>
+	<enabled>1</enabled>
+	<period__s_>8.6</period__s_>
+	<pulse__s_>3.1</pulse__s_>
+	<power>1.315</power>
+	<tolerance>0.163</tolerance>
+</Synchresis>

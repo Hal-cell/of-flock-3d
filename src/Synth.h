@@ -43,6 +43,10 @@ public:
 	// 论文 Spectromorphological Synchresis：与 visual 共享同一条轨迹曲线
 	void setConductorValue(float v) { a_conductorValue.store(v); }
 
+	// 主线程读：实测 audio 能量 [0..1]，给 Synchresis 自感知用
+	// 由 audioOut() 计算 RMS 经归一化后写入原子变量
+	float getAudioEnergyMeasured() const { return a_audioEnergyMeasured.load(); }
+
 	// HUD 用：当前活跃（attack/sustain/release 中）的 drone voice 数
 	int getActiveDroneCount() const;
 
@@ -92,6 +96,7 @@ private:
 	ofParameter<float> minMassToFire;  // 低于此质量的碰撞被忽略
 	ofParameter<bool>  audioEnabled;
 	ofParameter<float> droneGlideMs;   // drone voice 音高变化时的 glide 时长（ms，用于 scale 切换）
+	ofParameter<float> audioEnergyGain; // 调灵敏度：实测能量 × 这个值（默认 1，可上 5）
 
 	// ─── FM 参数（2-op：carrier + modulator）───
 	// fmRatio 在 GUI 是连续 float，使用时 snap 到 0.5 倍数
@@ -130,6 +135,7 @@ private:
 	ofParameter<float> clusterProximity;    // 空间邻近阈值（voice 跟踪用）
 	ofParameter<float> clusterCutoff;       // SVF lowpass cutoff（Hz）
 	ofParameter<float> clusterResonance;    // SVF resonance（0..0.95）
+	ofParameter<float> clusterDroneFold;    // wave fold 量（0..1）—— 加谐波不加幅度
 
 	// ─── Cluster Drone Voice（polyphonic drone 池，saw + SVF lowpass）───
 	struct DroneVoice {
@@ -176,6 +182,10 @@ private:
 	// 来自 MorphologyConductor：0..1 共享形态学能量（baseline 0.5）
 	// 论文 Spectromorphological Synchresis：与 visual 共用一条轨迹曲线
 	std::atomic<float> a_conductorValue{0.5f};
+
+	// 给 Synchresis 用：audioOut() per-buffer 算 RMS 并归一化写入
+	// 主线程通过 getAudioEnergyMeasured() 读取
+	std::atomic<float> a_audioEnergyMeasured{0.0f};
 
 	// Conductor 对 Synth 的影响幅度（用户调，0=不受影响）
 	ofParameter<float> conductorAmount;

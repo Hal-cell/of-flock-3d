@@ -18,6 +18,9 @@ void ofApp::setup(){
 	conductor.buildGui(morphologyParams);
 	morphologyGui.setup(morphologyParams);
 
+	synchresis.buildGui(synchresisParams);
+	synchresisGui.setup(synchresisParams);
+
 	// 自动加载上次的设置（在 flock.setup 之前，让 setup 用上恢复值）
 	if (ofFile::doesFileExist(ofToDataPath("flock_settings.xml"))) {
 		flockGui.loadFromFile("flock_settings.xml");
@@ -31,9 +34,14 @@ void ofApp::setup(){
 		morphologyGui.loadFromFile("morphology_settings.xml");
 		ofLogNotice() << "loaded morphology_settings.xml";
 	}
+	if (ofFile::doesFileExist(ofToDataPath("synchresis_settings.xml"))) {
+		synchresisGui.loadFromFile("synchresis_settings.xml");
+		ofLogNotice() << "loaded synchresis_settings.xml";
+	}
 
 	flock.setup(ofGetWidth(), ofGetHeight());
 	conductor.setup();
+	synchresis.setup();
 
 	// ─── 音频引擎 ───
 	int sampleRate  = 44100;
@@ -108,18 +116,31 @@ void ofApp::exit(){
 	flockGui.saveToFile("flock_settings.xml");
 	synthGui.saveToFile("synth_settings.xml");
 	morphologyGui.saveToFile("morphology_settings.xml");
-	ofLogNotice() << "saved flock_settings.xml + synth_settings.xml + morphology_settings.xml";
+	synchresisGui.saveToFile("synchresis_settings.xml");
+	ofLogNotice() << "saved flock/synth/morphology/synchresis _settings.xml";
 }
 
 //==============================================================
 //  update — 主线程（main window 上下文）
 //==============================================================
 void ofApp::update(){
-	// Morphology Conductor 先更新（论文 Spectromorphological Synchresis 顶层指挥）
-	conductor.update(ofGetLastFrameTime());
-	float morphV = conductor.value();
-	flock.setConductorValue(morphV);
-	synth.setConductorValue(morphV);
+	float dt = ofGetLastFrameTime();
+
+	// 1. Morphology Conductor — 产生目标轨迹
+	conductor.update(dt);
+	float target = conductor.value();
+
+	// 2. Synchresis — 系统对自身的感知 + 周期 cadence 校正
+	//    （论文 Battey Fluid Audiovisual Counterpoint 的算法化）
+	float audioE  = synth.getAudioEnergyMeasured();
+	float visualE = flock.getVisualEnergyMeasured();
+	synchresis.update(dt, target, audioE, visualE);
+
+	// 3. 把 target + nudge 推给 synth / flock（仍在 [0..1] 范围）
+	float audioTarget  = ofClamp(target + synchresis.audioCorrection(),  0.0f, 1.0f);
+	float visualTarget = ofClamp(target + synchresis.visualCorrection(), 0.0f, 1.0f);
+	synth.setConductorValue(audioTarget);
+	flock.setConductorValue(visualTarget);
 
 	flock.update();
 
@@ -209,12 +230,23 @@ void ofApp::drawGui(ofEventArgs&){
 		                   conductor.getModeName().c_str(),
 		                   conductor.value(),
 		                   conductor.phaseProgress());
+		// HUD 第三行：synchresis 状态
+		{
+			float ss = synchresis.syncStrength();
+			ImGui::TextColored(ImVec4(1.0f - ss, ss * 0.8f + 0.2f, ss * 0.5f + 0.3f, 1.0f),
+			                   "sync:       %-13s   audio %.2f  visual %.2f",
+			                   ss > 0.5f ? "← CADENCE" : "(counterpoint)",
+			                   synth.getAudioEnergyMeasured(),
+			                   flock.getVisualEnergyMeasured());
+		}
 		ImGui::Separator();
 
 		if (ImGui::BeginTabBar("MainTabs")) {
 			if (ImGui::BeginTabItem("Morphology")) {
 				ImGui::BeginChild("MorphScroll", ImVec2(0, 0), false);
 				conductor.drawImGui();
+				ImGui::Spacing();
+				synchresis.drawImGui();
 				ImGui::EndChild();
 				ImGui::EndTabItem();
 			}
@@ -249,6 +281,15 @@ void ofApp::drawGui(ofEventArgs&){
 				            flock.getFieldAmpTotal());
 				ImGui::Text("morphology conductor : %.2f (%s)",
 				            conductor.value(), conductor.getModeName().c_str());
+				ImGui::Separator();
+				ImGui::TextDisabled("Synchresis (self-aware coupling)");
+				ImGui::Text("audio energy (measured) : %.2f",
+				            synth.getAudioEnergyMeasured());
+				ImGui::Text("visual energy (measured) : %.2f",
+				            flock.getVisualEnergyMeasured());
+				ImGui::Text("sync strength : %.2f", synchresis.syncStrength());
+				ImGui::Text("audio nudge : %+.3f", synchresis.audioCorrection());
+				ImGui::Text("visual nudge : %+.3f", synchresis.visualCorrection());
 				ImGui::EndTabItem();
 			}
 			ImGui::EndTabBar();

@@ -39,7 +39,7 @@
 	<cluster_minMass>44.8</cluster_minMass>
 	<cluster_minCount>27</cluster_minCount>
 	<cluster_cellDensity>2</cluster_cellDensity>
-	<tail_length>0</tail_length>
+	<tail_length>5</tail_length>
 	<tail_audio_sens>0.934219</tail_audio_sens>
 	<tail_alpha>0.983418</tail_alpha>
 	<cluster_sensitivity>1</cluster_sensitivity>
@@ -48,5 +48,5 @@
 	<specular>0.643789</specular>
 	<ambient>0.35377</ambient>
 	<glow>0.00990234</glow>
-	<conductor_amount>0.845</conductor_amount>
+	<conductor_amount>1</conductor_amount>
 </Flock_3D>

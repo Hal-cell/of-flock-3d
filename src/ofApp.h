@@ -6,6 +6,7 @@
 #include "Flock3D.h"
 #include "Synth.h"
 #include "MorphologyConductor.h"
+#include "Synchresis.h"
 
 class ofApp : public ofBaseApp {
 public:
@@ -29,6 +30,7 @@ private:
 	Flock3D flock;
 	Synth   synth;
 	MorphologyConductor conductor;
+	Synchresis          synchresis;
 
 	ofSoundStream soundStream;
 
@@ -36,9 +38,11 @@ private:
 	ofParameterGroup flockParams;
 	ofParameterGroup synthParams;
 	ofParameterGroup morphologyParams;
+	ofParameterGroup synchresisParams;
 	ofxPanel flockGui;
 	ofxPanel synthGui;
 	ofxPanel morphologyGui;
+	ofxPanel synchresisGui;
 
 	// ImGui — 在 drawGui() 第一次触发时初始化（保证 listener attach 到 gui window）
 	ofxImGui::Gui imgui;

@@ -28,25 +28,26 @@
 		<p3_decay>0.203004</p3_decay>
 	</partials>
 	<FM>
-		<FM_ratio>7.08163</FM_ratio>
-		<FM_index>3.4898</FM_index>
+		<FM_ratio>6.78</FM_ratio>
+		<FM_index>3</FM_index>
 		<FM_idxDecay__ms_>46.5083</FM_idxDecay__ms_>
-		<tail_→_idxDecay>0.5</tail_→_idxDecay>
+		<tail_→_idxDecay>0.579</tail_→_idxDecay>
 	</FM>
 	<ClusterDrone>
-		<vol>0.734</vol>
+		<vol>0.873</vol>
 		<attack__ms_>3052.81</attack__ms_>
 		<release__ms_>4876.79</release__ms_>
 		<detune>0.00791075</detune>
 		<proximity>384.082</proximity>
-		<cutoff__Hz_>2976.6</cutoff__Hz_>
+		<cutoff__Hz_>621</cutoff__Hz_>
 		<resonance>0.643109</resonance>
+		<fold>0.171</fold>
 	</ClusterDrone>
 	<reverbSize>0.8245</reverbSize>
 	<reverbDamp>0.641934</reverbDamp>
 	<reverb_preDelay__ms_>5.68359</reverb_preDelay__ms_>
 	<Wind>
-		<vol>0.259</vol>
+		<vol>0.548</vol>
 		<cutoff__Hz_>1631.63</cutoff__Hz_>
 		<resonance>0.2</resonance>
 		<sensitivity>1</sensitivity>
@@ -56,5 +57,6 @@
 		<amp→cutoff>0.544</amp→cutoff>
 	</Wind>
 	<drone_glide__ms_>2427</drone_glide__ms_>
-	<conductor_amount>0.817</conductor_amount>
+	<conductor_amount>0.881</conductor_amount>
+	<audio_energy_gain>1</audio_energy_gain>
 </Synth>

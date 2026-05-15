@@ -423,6 +423,59 @@ effective_len = base_len × (0.5 + audio_influence × sensitivity × 1.5)
 - 拖 GUI 到副屏 / 演出环境分离控制
 - 全屏 flock 时 GUI 不会盖住视觉
 
+## rp-36 — Synchresis 自感知 + 周期 cadence（系统的"agency"）
+
+**Commit**: `git tag rp-36-synchresis`
+
+**论文背景**：实现 Battey "Fluid Audiovisual Counterpoint" —— 声画大部分时间
+独立演化（counterpoint），关键时刻收束到同一轨迹（synchresis cadence）。
+这是用户 PhD "negotiation with computational system" 主题的算法化具体：
+系统**对自身的状态有感知**，**自主**决定何时强制声画对齐。
+
+**新文件**：
+- `src/Synchresis.h/cpp`：自感知 + 周期补偿控制器
+
+**新增的"系统自感知"测量**：
+- `Synth::getAudioEnergyMeasured()` — 在 audioOut() 算 RMS，归一化到 [0..1]，
+  1-pole smoothing 写入 atomic float；主线程读取
+- `Flock3D::getVisualEnergyMeasured()` — 主线程算 density × meanSpeed × meanBrightness
+  复合 (0.4 / 0.4 / 0.2 加权)
+
+**Synchresis 控制器**：
+- 每帧吃 `(target, audioE, visualE)`，输出 `audioCorrection / visualCorrection`
+- Gaussian 脉冲 cadence：每 syncPeriod 秒（默认 30s）一次脉冲，宽度 syncDuration
+  （默认 5s），峰值时 sync strength=1
+- Sync strength 大 → 用 P-control `nudge = strength × power × (target - measured)`
+  把声画往 target 拉
+- Sync strength 小（脉冲间）→ nudge≈0，声画自由 drift = counterpoint
+- driftTolerance：偏离小于该值时不补偿（避免追噪声）
+
+**ofApp 串接**：
+```
+conductor.update(dt)     → target
+read measured audio/visual energy
+synchresis.update(dt, target, audioE, visualE)
+audioTarget  = clamp(target + audioCorrection,  0, 1)
+visualTarget = clamp(target + visualCorrection, 0, 1)
+synth.setConductorValue(audioTarget)
+flock.setConductorValue(visualTarget)
+```
+
+**GUI**：Morphology tab 下方加 Synchresis section，4 路 PlotLines 显示
+target / audio / visual / syncStrength 轨迹（10s history）。HUD 顶部加
+sync 状态行 + 颜色高亮（counterpoint 灰 / cadence 暖金）。Help tab 加
+所有实测数值。
+
+**默认 OFF**（向后兼容 rp-35）：用户切换 `enabled` 才启用。开启后实测
+audio energy = 0.6 但 conductor target = 0.3 时，sync 脉冲到来会把
+audioTarget 暂时压到 -0.3 范围 → wind/drone vol 降下来，把实际 audio
+energy 拉到 target 附近。脉冲过后又松开。
+
+**Use this checkpoint to**:
+- 加更复杂的"系统判断"逻辑（思路 4：surprise injection）
+- 训练 co-performer 模型（思路 2）—— history buffer 已经在记录所有信号
+- 把 cadence 由"周期触发"改成"事件触发"（如 morphology phase 到 0.5 触发）
+
 ## rp-35 — Morphology Conductor（论文 Spectromorphological Synchresis 落地）
 
 **Commit**: `git tag rp-35-morphology-conductor`
