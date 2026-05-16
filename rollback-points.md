@@ -808,3 +808,24 @@ rp-34（ImGui ID fix）论文前版本
 rp-43-smooth-baseline` (5d9106c) 已推
 
 想把粒子改成菌丝效果，粒子和粒子之间会动态的生成连线
+
+## rp-45-pre-mycelium — Mycelium 加入前基线
+**Commit**: `git tag rp-45-pre-mycelium` (52170e4)
+Granular 完整：bundled ChurchBells + pitch offset + GUI drop zone。
+作为 Mycelium 视觉实验的回滚锚点。
+
+## rp-46-mycelium — Mycelium 视觉 4 模式 + FBO bloom
+**Commit**: `git tag rp-46-mycelium` (0ca3d8f)
+- 4 种 link 模式可切换：Distance / KNN / Lifetime decay / Gabriel (Delaunay-ish)
+- 公共：spatial hash + node stride 抽样
+- FBO bloom wrapper：帧间累积 + fade → 生长扩散感
+- Mycelium GUI 新区段，含模式 combo + 各模式特化参数
+
+## rp-47-click-pulsar — Mycelium → Click (Pulsar) 音频耦合
+**Commit**: `git tag rp-47-click-pulsar` (d0338f8)
+- 第 6 个音频层：Pulsar synthesis click，由 mycelium link 密度驱动
+- 单 pulsar = Hann 窗 × sin(2π · formant · t)，per-trigger ±10% formant jitter
+- rate = baseRate + clamp(links/2000) × densityBoost；conductor 可调放大
+- Post-reverb 路径保持干燥 Ikeda data-matrix 质感
+- 7 参数 GUI；其他（density ref/accent/pan/window）硬编码
+- 默认 base rate 8Hz 确保启动可闻；mycelium on 后过渡到 swarm
