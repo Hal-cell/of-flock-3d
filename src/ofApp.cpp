@@ -172,6 +172,10 @@ void ofApp::update(){
 	// 把 cluster 数推给 Synth — granular grain rate 用（cluster 多 → 颗粒更密）
 	synth.setClusterCount(lastClusterCount);
 
+	// Mycelium 上一帧的 link 数 → Click 引擎驱动（菌丝越密 → click 越密）
+	// 上一帧的值（draw 后）— 1 frame 延迟可忽略
+	synth.setMyceliumDensity(flock.getMyceliumLinkCount());
+
 	// 主线程 → synth：本帧的碰撞 → 触发 event 音
 	for (const auto& ev : flock.getCollisionsThisFrame()) {
 		synth.triggerCollision(ev);

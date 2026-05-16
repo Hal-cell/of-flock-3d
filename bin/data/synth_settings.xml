@@ -7,7 +7,7 @@
 	<reverbAmt>0.853</reverbAmt>
 	<rootFreq__Hz_>91.575</rootFreq__Hz_>
 	<scale>1</scale>
-	<eventVol>0.369</eventVol>
+	<eventVol>0.77</eventVol>
 	<decay__ms_>163.4</decay__ms_>
 	<hit_gain>0.5865</hit_gain>
 	<minMass>2.75</minMass>
@@ -70,4 +70,29 @@
 		<attack_frac>0.12</attack_frac>
 		<pitch_offset__st_>14.7</pitch_offset__st_>
 	</Granular>
+	<Click__Ikeda_>
+		<enabled>0</enabled>
+		<vol>3</vol>
+		<base_rate__Hz_>84.9</base_rate__Hz_>
+		<density_boost__Hz_>381</density_boost__Hz_>
+		<density_ref__links_>1877</density_ref__links_>
+		<conductor_amount>0.925</conductor_amount>
+		<length__ms_>28.39</length__ms_>
+		<HPF__Hz_>1342</HPF__Hz_>
+		<tone_mix>0.865</tone_mix>
+		<tone_pitch_min__Hz_>5268</tone_pitch_min__Hz_>
+		<tone_pitch_max__Hz_>7786</tone_pitch_max__Hz_>
+		<pan_random>1</pan_random>
+		<gain>0.4</gain>
+		<accent_chance>0.288</accent_chance>
+	</Click__Ikeda_>
+	<Click__Pulsar_>
+		<enabled>1</enabled>
+		<vol>0.679</vol>
+		<base_rate__Hz_>0</base_rate__Hz_>
+		<density_boost__Hz_>63.5</density_boost__Hz_>
+		<conductor_amount>0.845</conductor_amount>
+		<pulsaret__ms_>4.78</pulsaret__ms_>
+		<formant__Hz_>9000</formant__Hz_>
+	</Click__Pulsar_>
 </Synth>

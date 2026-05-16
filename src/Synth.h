@@ -45,6 +45,10 @@ public:
 	// 论文 Spectromorphological Synchresis：与 visual 共享同一条轨迹曲线
 	void setConductorValue(float v) { a_conductorValue.store(v); }
 
+	// 主线程（ofApp::update 每帧）：Mycelium 当前 link 总数
+	// 音频侧驱动 Ikeda-style click 引擎的密度
+	void setMyceliumDensity(int n) { a_myceliumLinks.store(n); }
+
 	// 主线程读：实测 audio 能量 [0..1]，给 Synchresis 自感知用
 	// 由 audioOut() 计算 RMS 经归一化后写入原子变量
 	float getAudioEnergyMeasured() const { return a_audioEnergyMeasured.load(); }
@@ -169,6 +173,37 @@ private:
 	static constexpr int NUM_GRAINS = 16;
 	std::array<Grain, NUM_GRAINS> grains;
 	float grainSchedAccum = 0.0f;   // sample 计数器 → 下一次 grain 触发
+
+	// ─── Click 层（Pulsar Synthesis — Curtis Roads 风格 data-matrix click）───
+	// 单 pulsar = Hann 窗 × 正弦载波（formant frequency 决定谱峰）
+	// 周期 = 1/rate；mycelium link density 驱动 rate
+	// Post-reverb 路径保持干燥
+	// 7 核心参数（density ref / accent / pan random / window shape 内部硬编码）
+	ofParameterGroup   clickGroup;
+	ofParameter<bool>  clickEnabled;
+	ofParameter<float> clickVol;
+	ofParameter<float> clickBaseRate;        // 基础触发率 Hz（0 = 完全靠 mycelium）
+	ofParameter<float> clickDensityBoost;    // density=1 时加 N Hz（density = links/2000）
+	ofParameter<float> clickConductorAmount; // 0..1，conductor 对 rate 的调制深度
+	ofParameter<float> clickLengthMs;        // pulsaret duration (ms)
+	ofParameter<float> clickFormantHz;       // 载波频率（决定 click 谱峰，越高越"亮"）
+
+	// 主线程 → 音频：mycelium link 数
+	std::atomic<int>   a_myceliumLinks{0};
+
+	struct Click {
+		bool   active   = false;
+		int    age      = 0;
+		int    length   = 0;             // pulsaret 总样本数
+		float  amp      = 0.0f;
+		float  panL = 0.5f, panR = 0.5f;
+		float  formantFreq  = 0.0f;      // 载波 Hz
+		float  formantPhase = 0.0f;
+	};
+	static constexpr int NUM_CLICKS = 64;
+	std::array<Click, NUM_CLICKS> clicks;
+	float clickAccum = 0.0f;
+	void  triggerClick();
 
 	// 主线程调用：刷新 cluster 数（影响 grain 触发率）
 public:

@@ -56,7 +56,7 @@
 		<node_stride>29</node_stride>
 		<alpha>0.35</alpha>
 		<far_fade>0.333</far_fade>
-		<line_width>3</line_width>
+		<line_width>3.5</line_width>
 		<link_mode>3</link_mode>
 		<KNN_K>8</KNN_K>
 		<lifetime__frames_>121</lifetime__frames_>

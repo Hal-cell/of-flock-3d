@@ -267,6 +267,13 @@ private:
 	std::unordered_map<uint64_t, int> persistentLinks;
 	ofFbo              myceliumFbo;
 	int                myceliumFboW = 0, myceliumFboH = 0;
+	// 上次 buildMyceliumMesh 的 link 数（vertices/2），给音频侧 click 引擎驱动
+	mutable int        lastMyceliumLinkCount = 0;
+
+public:
+	// 给 Synth click engine 用：上一帧 mycelium link 总数（0 = mycelium off 或无 link）
+	int getMyceliumLinkCount() const { return lastMyceliumLinkCount; }
+private:
 
 	// ─── Morphology Conductor 输入 ───
 	// conductorValue: 0..1, baseline=0.5（来自顶层 MorphologyConductor）

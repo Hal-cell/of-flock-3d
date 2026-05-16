@@ -1038,7 +1038,7 @@ void Flock3D::drawMycelium(){
 
 void Flock3D::buildMyceliumMesh(){
 	float linkD = myceliumLinkDist.get();
-	if (linkD <= 0.5f) { myceliumMesh.clear(); return; }
+	if (linkD <= 0.5f) { myceliumMesh.clear(); lastMyceliumLinkCount = 0; return; }
 	int stride    = std::max(1, (int)myceliumNodeStride.get());
 	int maxLinks  = std::max(1, (int)myceliumMaxLinks.get());
 	int knnK      = std::max(1, (int)myceliumKnnK.get());
@@ -1055,7 +1055,7 @@ void Flock3D::buildMyceliumMesh(){
 		const auto& p = particles[i];
 		if (p.alive && p.fadeOutTimer < 0) nodeIdx.push_back(i);
 	}
-	if (nodeIdx.size() < 2) { myceliumMesh.clear(); return; }
+	if (nodeIdx.size() < 2) { myceliumMesh.clear(); lastMyceliumLinkCount = 0; return; }
 
 	// 2. Bbox（紧贴 node 区域）
 	glm::vec3 minP(1e9f), maxP(-1e9f);
@@ -1261,6 +1261,9 @@ void Flock3D::buildMyceliumMesh(){
 			break;
 		}
 	}
+
+	// 记录本帧 link 数（给音频 click 引擎用）；每个 link 两个 vertex
+	lastMyceliumLinkCount = (int)(mv.size() / 2);
 }
 
 void Flock3D::renderMyceliumMesh(){

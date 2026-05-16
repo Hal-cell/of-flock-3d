@@ -320,6 +320,18 @@ void Synth::buildGui(ofParameterGroup& group){
 	granGroup.add(grainAttackFrac.set("attack frac",        0.08f, 0.02f, 0.5f));
 	group.add(granGroup);
 
+	// ─── Click 层（Pulsar synthesis — mycelium-driven）───
+	// 默认 base rate=8Hz：即使 mycelium off 也能听到稳定 tick → 验证 click 是否生效
+	clickGroup.setName("Click (Pulsar)");
+	clickGroup.add(clickEnabled.set("enabled",                 true));
+	clickGroup.add(clickVol.set("vol",                         1.0f,  0.0f, 3.0f));
+	clickGroup.add(clickBaseRate.set("base rate (Hz)",         8.0f,  0.0f, 200.0f));
+	clickGroup.add(clickDensityBoost.set("density boost (Hz)", 60.0f, 0.0f, 400.0f));
+	clickGroup.add(clickConductorAmount.set("conductor amount", 0.0f, 0.0f, 1.0f));
+	clickGroup.add(clickLengthMs.set("pulsaret (ms)",          3.0f,  0.3f, 30.0f));
+	clickGroup.add(clickFormantHz.set("formant (Hz)",          4000.0f, 200.0f, 9000.0f));
+	group.add(clickGroup);
+
 	// ─── Morphology Conductor 影响 ───
 	// 论文 Spectromorphological Synchresis：conductor 曲线对 audio 侧 brightness 的影响幅度
 	// 0 = 不受影响（向后兼容 rp-34）；1 = 满影响（conductor 1.0 → drone cutoff + FM index 双倍）
@@ -442,6 +454,26 @@ void Synth::drawImGui(){
 		                                       [](const Grain& g) { return g.active; }));
 	}
 
+	if (ig::section("Click (Pulsar — mycelium-driven)")) {
+		ig::check(clickEnabled);
+		ig::slider(clickVol);
+		ImGui::Separator();
+		ig::slider(clickBaseRate, "%.1f Hz");
+		ig::slider(clickDensityBoost, "%.1f Hz");
+		ig::slider(clickConductorAmount);
+		ImGui::Separator();
+		ImGui::TextDisabled("pulsar voice: Hann window × sine carrier");
+		ig::slider(clickLengthMs, "%.2f ms");
+		ig::sliderLog(clickFormantHz, "%.0f Hz");
+		// HUD
+		int curLinks = a_myceliumLinks.load();
+		float densNorm = std::min(1.0f, (float)curLinks / 2000.0f);
+		float estRate = clickBaseRate.get() + densNorm * clickDensityBoost.get();
+		ImGui::TextDisabled("rate = base + (links/2000) × boost");
+		ImGui::TextDisabled("links: %d  density: %.2f  → rate ≈ %.1f Hz",
+		                    curLinks, densNorm, estRate);
+	}
+
 	if (ig::section("Hall Reverb")) {
 		ig::slider(reverbAmt);
 		ig::slider(reverbSize);
@@ -560,6 +592,47 @@ void Synth::triggerCollision(const Flock3D::CollisionEvent& ev){
 	}
 	eventRing[w] = te;
 	ringWrite.store(next, std::memory_order_release);
+}
+
+//--------------------------------------------------------------
+//  Click (Pulsar) — 触发一个 pulsar event（音频线程调用）
+//  Pulsaret = Hann 窗 × sin(2π · formant · t)
+//  Pan 全随机 + 5% accent + ±10% formant jitter（避免完美周期性 → 自然）
+//--------------------------------------------------------------
+void Synth::triggerClick(){
+	int slot = -1;
+	for (int i = 0; i < NUM_CLICKS; i++) {
+		if (!clicks[i].active) { slot = i; break; }
+	}
+	if (slot < 0) {
+		int oldestAge = -1;
+		for (int i = 0; i < NUM_CLICKS; i++) {
+			if (clicks[i].age > oldestAge) { oldestAge = clicks[i].age; slot = i; }
+		}
+		if (slot < 0) slot = 0;
+	}
+
+	auto& c = clicks[slot];
+	c.active = true;
+	c.age = 0;
+	c.length = std::max(2, (int)(clickLengthMs.get() * 0.001f * sampleRate));
+
+	// Formant + 微抖（±10%）避免感知上的"音调感"
+	float baseF = ofClamp(clickFormantHz.get(), 50.0f, sampleRate * 0.45f);
+	float jit = ((float)std::rand() / (float)RAND_MAX - 0.5f) * 0.2f;   // ±10%
+	c.formantFreq = baseF * (1.0f + jit);
+	c.formantPhase = 0.0f;
+
+	// 全随机 pan
+	float pos = (float)std::rand() / (float)RAND_MAX;
+	c.panL = cosf(pos * HALF_PI);
+	c.panR = sinf(pos * HALF_PI);
+
+	// 5% accent，2.5× 大声
+	// Hann 窗 peak = 1.0，amp 直接是 pulsaret 峰值
+	float amp = 1.0f;
+	if (((float)std::rand() / (float)RAND_MAX) < 0.05f) amp *= 2.5f;
+	c.amp = amp;
 }
 
 //--------------------------------------------------------------
@@ -915,6 +988,24 @@ void Synth::audioOut(ofSoundBuffer& buffer){
 	float invAttackF   = 1.0f / grainAttackF;
 	float invDecayF    = 1.0f / (1.0f - grainAttackF);
 
+	// ─── Click（Ikeda） per-buffer 算 effective rate ───
+	// rate = baseRate + densityNorm × densityBoost；conductor 可选放大
+	// densityNorm = clamp(linkCount / 2000, 0, 1)  ← densityRef 硬编码 2000
+	int   curLinks     = a_myceliumLinks.load();
+	float densNorm     = std::min(1.0f, (float)curLinks / 2000.0f);
+	float clkRate      = clickBaseRate.get() + densNorm * clickDensityBoost.get();
+	// Conductor staging（与 granular 一样的中段进入曲线）：
+	// 低能 → 0.3x rate，高能 → 1.5x rate，ca=0 时不影响
+	{
+		static const EnergyStage stageClick {0.0f, 1.0f, 3};   // sigmoid 全程
+		float cca = ofClamp(clickConductorAmount.get(), 0.0f, 1.0f);
+		clkRate = stageClick.blendRange(energy, clkRate * 0.3f, clkRate * 1.5f, cca);
+	}
+	// rate < 0.5 Hz 视作 "click 关闭"，避免一发等 16 分钟的极端情况
+	bool   clkOn = clkRate >= 0.5f && clickEnabled.get();
+	float  samplesPerClick = clkOn ? ((float)sampleRate / clkRate) : 1e9f;
+	float  clkVol = clkOn ? clickVol.get() : 0.0f;
+
 	for (int i = 0; i < n; i++) {
 		float left = 0, right = 0;
 
@@ -1228,6 +1319,45 @@ void Synth::audioOut(ofSoundBuffer& buffer){
 
 			left  += verbL * verbAmt;
 			right += verbR * verbAmt;
+		}
+
+		// ───────────────────────────────
+		// E. Click (Pulsar) — POST-reverb 保持干燥
+		// 每 pulsar = Hann window × sin(2π · formant · t)
+		// 周期由 mycelium 密度 + conductor 调制
+		// ───────────────────────────────
+		if (clkOn) {
+			// 调度
+			clickAccum -= 1.0f;
+			if (clickAccum <= 0.0f) {
+				triggerClick();
+				clickAccum += samplesPerClick;
+				if (clickAccum < 1.0f) clickAccum = samplesPerClick;
+			}
+
+			float cLsum = 0, cRsum = 0;
+			for (auto& cl : clicks) {
+				if (!cl.active) continue;
+
+				float t = (float)cl.age / (float)cl.length;
+				if (t >= 1.0f) { cl.active = false; continue; }
+
+				// Hann 窗：sin(π × t) → 0..1..0 平滑包络
+				// 比 exp decay 更可闻（能量分布均匀，不是全集中在起头）
+				float window = sinf(t * (float)PI);
+
+				// Sine 载波（pulsaret formant）
+				float carrier = sinf(cl.formantPhase * TWO_PI);
+				cl.formantPhase += cl.formantFreq / (float)sampleRate;
+				if (cl.formantPhase >= 1.0f) cl.formantPhase -= 1.0f;
+
+				float s = window * carrier * cl.amp;
+				cLsum += s * cl.panL;
+				cRsum += s * cl.panR;
+				cl.age++;
+			}
+			left  += cLsum * clkVol;
+			right += cRsum * clkVol;
 		}
 
 		// ───────────────────────────────
