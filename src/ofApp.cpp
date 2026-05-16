@@ -18,6 +18,11 @@ void ofApp::setup(){
 	conductor.buildGui(morphologyParams);
 	morphologyGui.setup(morphologyParams);
 
+	// 第二 conductor — 用于 Counterpoint Mode（默认参数和主 conductor 一样）
+	conductorVisual.buildGui(morphologyVisualParams);
+	morphologyVisualParams.setName("Morphology (Visual)");   // 区分 XML 节点
+	morphologyVisualGui.setup(morphologyVisualParams);
+
 	synchresis.buildGui(synchresisParams);
 	synchresisGui.setup(synchresisParams);
 
@@ -38,6 +43,14 @@ void ofApp::setup(){
 		morphologyGui.loadFromFile("morphology_settings.xml");
 		ofLogNotice() << "loaded morphology_settings.xml";
 	}
+	if (ofFile::doesFileExist(ofToDataPath("morphology_visual_settings.xml"))) {
+		morphologyVisualGui.loadFromFile("morphology_visual_settings.xml");
+		ofLogNotice() << "loaded morphology_visual_settings.xml";
+	} else {
+		// 首次运行：默认让 visual conductor 用 DESCENT 模式 + 不同 phase
+		// → counterpoint 一启用就有明显反向 drift（demo 友好）
+		conductorVisual.mode.set(2);   // DESCENT
+	}
 	if (ofFile::doesFileExist(ofToDataPath("synchresis_settings.xml"))) {
 		synchresisGui.loadFromFile("synchresis_settings.xml");
 		ofLogNotice() << "loaded synchresis_settings.xml";
@@ -49,6 +62,7 @@ void ofApp::setup(){
 
 	flock.setup(ofGetWidth(), ofGetHeight());
 	conductor.setup();
+	conductorVisual.setup();
 	synchresis.setup();
 
 	// ─── 音频引擎 ───
@@ -124,9 +138,10 @@ void ofApp::exit(){
 	flockGui.saveToFile("flock_settings.xml");
 	synthGui.saveToFile("synth_settings.xml");
 	morphologyGui.saveToFile("morphology_settings.xml");
+	morphologyVisualGui.saveToFile("morphology_visual_settings.xml");
 	synchresisGui.saveToFile("synchresis_settings.xml");
 	scoreGui.saveToFile("score_settings.xml");
-	ofLogNotice() << "saved flock/synth/morphology/synchresis/score _settings.xml";
+	ofLogNotice() << "saved flock/synth/morphology(audio+visual)/synchresis/score _settings.xml";
 }
 
 //==============================================================
@@ -138,19 +153,31 @@ void ofApp::update(){
 	// 0. Score Player — 如果在播，覆写 conductor 的 mode/curve/etc 参数
 	scorePlayer.update(dt, conductor);
 
-	// 1. Morphology Conductor — 产生目标轨迹
+	// 1. Morphology Conductor(s) — 产生目标轨迹
+	//    counterpoint OFF: 单 conductor 驱动两边
+	//    counterpoint ON:  conductor → audio, conductorVisual → visual（独立 drift）
 	conductor.update(dt);
-	float target = conductor.value();
+	conductorVisual.update(dt);   // 始终更新（即使关着也保持 phase 同步）
 
-	// 2. Synchresis — 系统对自身的感知 + 周期 cadence 校正
-	//    （论文 Battey Fluid Audiovisual Counterpoint 的算法化）
+	float audioCurve  = conductor.value();
+	float visualCurve = synchresis.counterpointEnabled.get()
+	                  ? conductorVisual.value()
+	                  : audioCurve;
+
+	// 2. Synchresis — 周期 cadence pulse + (legacy) per-side nudges
+	//    Synchresis.update 只用 audio target 算 nudge（保持向后兼容）
 	float audioE  = synth.getAudioEnergyMeasured();
 	float visualE = flock.getVisualEnergyMeasured();
-	synchresis.update(dt, target, audioE, visualE);
+	synchresis.update(dt, audioCurve, audioE, visualE);
 
-	// 3. 把 target + nudge 推给 synth / flock（仍在 [0..1] 范围）
-	float audioTarget  = ofClamp(target + synchresis.audioCorrection(),  0.0f, 1.0f);
-	float visualTarget = ofClamp(target + synchresis.visualCorrection(), 0.0f, 1.0f);
+	// 3. Counterpoint convergence: cadence 期间把 visual 拉向 audio
+	//    force = syncStrength × convergence（counterpoint OFF 时永远 0）
+	float convForce = synchresis.convergenceForce();
+	float visualBlended = visualCurve + (audioCurve - visualCurve) * convForce;
+
+	// 4. 应用 nudges + clamp，推给 synth / flock
+	float audioTarget  = ofClamp(audioCurve   + synchresis.audioCorrection(),  0.0f, 1.0f);
+	float visualTarget = ofClamp(visualBlended + synchresis.visualCorrection(), 0.0f, 1.0f);
 	synth.setConductorValue(audioTarget);
 	flock.setConductorValue(visualTarget);
 
@@ -269,7 +296,20 @@ void ofApp::drawGui(ofEventArgs&){
 		if (ImGui::BeginTabBar("MainTabs")) {
 			if (ImGui::BeginTabItem("Morphology")) {
 				ImGui::BeginChild("MorphScroll", ImVec2(0, 0), false);
+				ImGui::TextColored(ImVec4(0.9f, 0.85f, 0.5f, 1.0f),
+				                   "▼ Morphology (Audio)");
 				conductor.drawImGui();
+				ImGui::Spacing();
+				// 第二 conductor 只在 counterpoint 开启时活跃，但 GUI 始终可见
+				ImVec4 vcCol = synchresis.counterpointEnabled.get()
+				             ? ImVec4(0.65f, 0.85f, 1.0f, 1.0f)
+				             : ImVec4(0.45f, 0.45f, 0.50f, 1.0f);
+				ImGui::TextColored(vcCol, "▼ Morphology (Visual) %s",
+				                   synchresis.counterpointEnabled.get()
+				                       ? " — active" : " — inactive (counterpoint OFF)");
+				ImGui::PushID("visualConductor");
+				conductorVisual.drawImGui();
+				ImGui::PopID();
 				ImGui::Spacing();
 				synchresis.drawImGui();
 				ImGui::Spacing();

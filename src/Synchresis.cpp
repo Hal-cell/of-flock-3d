@@ -18,6 +18,9 @@ void Synchresis::buildGui(ofParameterGroup& group) {
 	group.add(syncDuration.set("pulse (s)",    5.0f, 0.5f,   30.0f));
 	group.add(syncPower.set("power",           0.5f, 0.0f,    1.5f));
 	group.add(driftTolerance.set("tolerance",  0.15f, 0.0f,   0.5f));
+	// Counterpoint Mode（rp-49）— Battey 真正版
+	group.add(counterpointEnabled.set("counterpoint",   false));
+	group.add(convergenceAmount.set("convergence",       0.85f, 0.0f, 1.0f));
 }
 
 void Synchresis::triggerCadence() {
@@ -102,6 +105,21 @@ void Synchresis::drawImGui() {
 
 		if (ImGui::Button("Trigger cadence now")) {
 			triggerCadence();
+		}
+
+		ImGui::Separator();
+		ImGui::TextDisabled("Counterpoint mode (Battey 真正版)");
+		ImGui::TextWrapped(
+			"OFF = single conductor drives both audio + visual (legacy).\n"
+			"ON  = audio follows Morphology, visual follows Morphology (Visual). "
+			"Cadence pulses pull visual toward audio by `convergence`.");
+		ig::check(counterpointEnabled);
+		ig::slider(convergenceAmount);
+		ImGui::TextDisabled("convergence: 0=pure counterpoint, 1=full snap at cadence peak");
+		if (counterpointEnabled.get()) {
+			ImGui::TextColored(ImVec4(0.65f, 0.85f, 1.0f, 1.0f),
+			                   "→ visual conductor active   force ≈ %.2f",
+			                   convergenceForce());
 		}
 
 		ImGui::Separator();

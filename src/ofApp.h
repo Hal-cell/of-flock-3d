@@ -32,7 +32,8 @@ public:
 private:
 	Flock3D flock;
 	Synth   synth;
-	MorphologyConductor conductor;
+	MorphologyConductor conductor;          // 主 conductor（counterpoint OFF=共享; ON=audio 用）
+	MorphologyConductor conductorVisual;    // 第二 conductor（counterpoint ON 时驱动 visual）
 	Synchresis          synchresis;
 	ScorePlayer         scorePlayer;
 
@@ -42,11 +43,13 @@ private:
 	ofParameterGroup flockParams;
 	ofParameterGroup synthParams;
 	ofParameterGroup morphologyParams;
+	ofParameterGroup morphologyVisualParams;   // 第二 conductor 的参数组
 	ofParameterGroup synchresisParams;
 	ofParameterGroup scoreParams;
 	ofxPanel flockGui;
 	ofxPanel synthGui;
 	ofxPanel morphologyGui;
+	ofxPanel morphologyVisualGui;
 	ofxPanel synchresisGui;
 	ofxPanel scoreGui;
 

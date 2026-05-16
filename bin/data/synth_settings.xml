@@ -88,11 +88,11 @@
 	</Click__Ikeda_>
 	<Click__Pulsar_>
 		<enabled>1</enabled>
-		<vol>0.679</vol>
+		<vol>0.405</vol>
 		<base_rate__Hz_>0</base_rate__Hz_>
 		<density_boost__Hz_>63.5</density_boost__Hz_>
 		<conductor_amount>0.845</conductor_amount>
-		<pulsaret__ms_>4.78</pulsaret__ms_>
+		<pulsaret__ms_>8.55</pulsaret__ms_>
 		<formant__Hz_>9000</formant__Hz_>
 	</Click__Pulsar_>
 </Synth>

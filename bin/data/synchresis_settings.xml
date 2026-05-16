@@ -5,4 +5,6 @@
 	<pulse__s_>3.1</pulse__s_>
 	<power>1.315</power>
 	<tolerance>0.163</tolerance>
+	<counterpoint>0</counterpoint>
+	<convergence>0.85</convergence>
 </Synchresis>

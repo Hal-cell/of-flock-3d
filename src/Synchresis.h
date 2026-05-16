@@ -47,6 +47,13 @@ public:
 	// 当前 sync 强度 [0..1]：0 = counterpoint 阶段，1 = cadence 峰值
 	float syncStrength() const { return syncStrength_; }
 
+	// Counterpoint mode: cadence 期间把 visual conductor 拉向 audio conductor 的强度
+	// = syncStrength × convergenceAmount（counterpoint OFF 时永远 0）
+	// 用法：visualTarget = lerp(visualConductor, audioConductor, convergenceForce())
+	float convergenceForce() const {
+		return counterpointEnabled.get() ? (syncStrength_ * convergenceAmount.get()) : 0.0f;
+	}
+
 	// 用户手动触发一次 cadence（重置 phase 到峰值附近）
 	void triggerCadence();
 
@@ -64,6 +71,13 @@ public:
 	ofParameter<float> syncDuration;       // cadence 脉冲宽度（秒）：脉冲持续多久
 	ofParameter<float> syncPower;          // 脉冲峰值时补偿强度的最大值（0..1）
 	ofParameter<float> driftTolerance;     // 偏离 < 这个值时不补偿（避免追噪声）
+
+	// Counterpoint Mode（Battey "Fluid AV Counterpoint"）
+	// OFF: 单 conductor → audio + visual 共享一条曲线（向后兼容）
+	// ON:  audio 跟 conductor，visual 跟 conductorVisual（独立曲线 → 自然 drift）
+	//      cadence 时 lerp(visualConductor, audioConductor, syncStrength × convergence)
+	ofParameter<bool>  counterpointEnabled;
+	ofParameter<float> convergenceAmount;  // 0=纯 counterpoint 永不收敛, 1=cadence 峰值时完全对齐
 
 private:
 	// 内部状态
