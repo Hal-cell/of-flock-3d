@@ -2,6 +2,7 @@
 
 #include "ofMain.h"
 #include "EnergyStage.h"
+#include <unordered_map>
 
 /**
  * Flock3D — 纯 3D Flock 粒子系统（独立版）
@@ -229,6 +230,44 @@ private:
 	ofParameter<float> tailAlpha;              // trail 整体 alpha
 	float              audioInfluence = 0.0f;  // 来自外部 setAudioInfluence()
 
+	// ─── Mycelium（菌丝网络）：4 种 link 模式 + FBO bloom ───
+	// LinkMode:
+	//   DISTANCE  — 距离阈值内取最近 N 条（每帧重建，无记忆）
+	//   KNN       — 严格 K 近邻（不限距离，linkDist 只作搜索上限）
+	//   LIFETIME  — 距离阈值 + 持久化：link 一旦生成会保留 N 帧才衰减消失
+	//                可看到"丝慢慢长出来 + 慢慢消散"的菌丝呼吸感
+	//   GABRIEL   — Gabriel graph（伪 Delaunay 子集）：两点间球内无第三点 → 连
+	//                给出空间均匀的有机 mesh
+	// FBO bloom 作为 wrapper：任何 mode 渲染到 FBO + 帧间 fade 累积 → 生长扩散感
+	enum LinkMode {
+		LINK_DISTANCE = 0,
+		LINK_KNN,
+		LINK_LIFETIME,
+		LINK_GABRIEL,
+	};
+
+	ofParameterGroup   myceliumGroup;
+	ofParameter<bool>  myceliumEnabled;
+	ofParameter<int>   myceliumLinkMode;     // 0..3 see LinkMode
+	ofParameter<float> myceliumLinkDist;     // 距离阈值 / KNN 搜索半径 → cell size
+	ofParameter<int>   myceliumMaxLinks;     // DISTANCE / GABRIEL: 每 node 最多几条
+	ofParameter<int>   myceliumKnnK;         // KNN 模式 K 值
+	ofParameter<int>   myceliumLifetime;     // LIFETIME 模式：link 寿命（帧）
+	ofParameter<int>   myceliumNodeStride;   // 每 N 个粒子取 1 个做 node（密度控制）
+	ofParameter<float> myceliumAlpha;        // 线整体 alpha
+	ofParameter<float> myceliumFadeNear;     // 远端 fade（DISTANCE/GABRIEL）
+	ofParameter<float> myceliumLineWidth;    // GL line width
+
+	// FBO bloom（生长扩散）
+	ofParameter<bool>  myceliumFboBloom;
+	ofParameter<float> myceliumFboFade;      // 0..1，每帧保留比例（0.95 = 5% fade）
+
+	ofMesh             myceliumMesh;         // 复用顶点 buffer
+	// 持久化 link：key = (min(a,b)<<32)|max(a,b)，val = ageInFrames
+	std::unordered_map<uint64_t, int> persistentLinks;
+	ofFbo              myceliumFbo;
+	int                myceliumFboW = 0, myceliumFboH = 0;
+
 	// ─── Morphology Conductor 输入 ───
 	// conductorValue: 0..1, baseline=0.5（来自顶层 MorphologyConductor）
 	// conductorAmount: 0..1（用户调节 conductor 对 Flock 的影响强度，0=不受影响）
@@ -256,4 +295,10 @@ private:
 	void      mergeIntoBigger(Particle& winner, Particle& loser);
 	void      loadShaderInline();
 	glm::vec3 computeFieldForce(const glm::vec3& pos, float ns) const;
+	// Mycelium 渲染管线
+	void      drawMycelium();           // 路由：FBO mode 或直接 mode
+	void      buildMyceliumMesh();      // 按 linkMode 填充 myceliumMesh
+	void      renderMyceliumMesh();     // glLineWidth + draw + 还原
+	void      drawMyceliumViaFbo();     // FBO bloom 路径（cam 内部 begin）
+	void      ensureMyceliumFbo();      // 懒分配 / 窗口变化时重建
 };

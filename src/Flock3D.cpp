@@ -71,6 +71,24 @@ void Flock3D::buildGui(ofParameterGroup& group) {
 	group.add(tailAudioSensitivity.set("tail audio sens", 1.0f, 0.0f, 2.0f));
 	group.add(tailAlpha.set("tail alpha",            0.45f, 0.0f, 1.0f));
 
+	// ─── Mycelium（菌丝网络）───
+	// 4 种 link 算法 + FBO bloom；详见 Flock3D.h LinkMode 注释
+	myceliumGroup.setName("Mycelium");
+	myceliumGroup.add(myceliumEnabled.set("enabled",          false));
+	// link mode：0=DISTANCE  1=KNN  2=LIFETIME  3=GABRIEL
+	myceliumGroup.add(myceliumLinkMode.set("link mode",       0,      0,     3));
+	myceliumGroup.add(myceliumLinkDist.set("link dist",       40.0f,  5.0f,  300.0f));
+	myceliumGroup.add(myceliumMaxLinks.set("max links/node",  4,      1,     16));
+	myceliumGroup.add(myceliumKnnK.set("KNN K",               6,      1,     16));
+	myceliumGroup.add(myceliumLifetime.set("lifetime (frames)", 90,   5,     600));
+	myceliumGroup.add(myceliumNodeStride.set("node stride",   5,      1,     50));
+	myceliumGroup.add(myceliumAlpha.set("alpha",              0.35f,  0.0f,  1.0f));
+	myceliumGroup.add(myceliumFadeNear.set("far fade",        0.05f,  0.0f,  1.0f));
+	myceliumGroup.add(myceliumLineWidth.set("line width",     1.0f,   0.5f,  4.0f));
+	myceliumGroup.add(myceliumFboBloom.set("fbo bloom",       false));
+	myceliumGroup.add(myceliumFboFade.set("fbo fade",         0.93f,  0.5f,  0.99f));
+	group.add(myceliumGroup);
+
 	// ─── Material ───
 	// 默认 sphere 着色 + 可调 halo；flash 时自动切到 rp-24 风格软盘（碰撞瞬间突出）
 	group.add(matBrightness.set("brightness",   0.55f, 0.0f, 1.0f));
@@ -157,6 +175,33 @@ void Flock3D::drawImGui() {
 		ig::sliderInt(tailLength);
 		ig::slider(tailAudioSensitivity);
 		ig::slider(tailAlpha);
+	}
+
+	if (ig::section("Mycelium (links)")) {
+		ig::check(myceliumEnabled);
+		static const std::vector<const char*> modeNames = {
+			"Distance", "KNN", "Lifetime decay", "Gabriel (Delaunay-ish)"
+		};
+		ig::combo(myceliumLinkMode, modeNames);
+		ImGui::Separator();
+		ig::slider(myceliumLinkDist, "%.1f");
+		ig::sliderInt(myceliumNodeStride);
+		// 模式特化参数（GUI 全显示，但只对应模式生效）
+		ImGui::TextDisabled("Distance / Gabriel:");
+		ig::sliderInt(myceliumMaxLinks);
+		ImGui::TextDisabled("KNN:");
+		ig::sliderInt(myceliumKnnK);
+		ImGui::TextDisabled("Lifetime:");
+		ig::sliderInt(myceliumLifetime);
+		ImGui::Separator();
+		ig::slider(myceliumAlpha);
+		ig::slider(myceliumFadeNear);
+		ig::slider(myceliumLineWidth, "%.1f");
+		ImGui::Separator();
+		ig::check(myceliumFboBloom);
+		ig::slider(myceliumFboFade, "%.3f");
+		ImGui::TextDisabled("FBO bloom = 帧间累积 + fade → 生长扩散感");
+		ImGui::TextDisabled("stride 5 = 1 node per 5 particles");
 	}
 
 	if (ig::section("Material")) {
@@ -697,6 +742,12 @@ void Flock3D::draw(){
 		trailMesh.draw();
 	}
 
+	// ─── Mycelium 网络（线条仍然在 ADD blend 下，自然 glow）───
+	// FBO 模式独立路径（cam.end 后再 blit）— 这里只画 direct 模式
+	if (myceliumEnabled && !myceliumFboBloom.get()) {
+		drawMycelium();
+	}
+
 	ofDisableBlendMode();
 
 	// ─── Debug：cluster grid 可视化 ───
@@ -737,6 +788,11 @@ void Flock3D::draw(){
 	}
 
 	cam.end();
+
+	// ─── Mycelium FBO bloom（cam.end 后才 blit；FBO 内部自己 push cam）───
+	if (myceliumEnabled && myceliumFboBloom.get()) {
+		drawMyceliumViaFbo();
+	}
 
 	// HUD
 	ofSetColor(255, 200);
@@ -954,6 +1010,332 @@ std::vector<Flock3D::Cluster> Flock3D::getClusters(int maxK) const {
 		[](const Cluster& a, const Cluster& b){ return a.totalMass > b.totalMass; });
 	if ((int)clusters.size() > maxK) clusters.resize(maxK);
 	return clusters;
+}
+
+//==============================================================
+//  Mycelium — 4 种 link 模式 + 可选 FBO bloom
+//  公共：spatial-hash by linkDist；node 抽样按 stride
+//
+//  模式特点：
+//    DISTANCE — 距离阈值内取最近 N（无记忆）
+//    KNN      — 严格 K 近邻；linkDist = 搜索半径上限
+//    LIFETIME — DISTANCE + 持久化：link 存活 N 帧再消失（菌丝呼吸）
+//    GABRIEL  — Gabriel graph：候选 pair (a,b)，midpoint 球内无第三 node
+//                → 给出空间均匀的有机 mesh（伪 Delaunay 子集）
+//==============================================================
+
+// 公共辅助：把 (a,b) 两节点 idx 打包成 64-bit key（用于 LIFETIME 模式）
+static inline uint64_t packPair(int a, int b) {
+	int lo = std::min(a, b);
+	int hi = std::max(a, b);
+	return ((uint64_t)(uint32_t)lo << 32) | (uint32_t)hi;
+}
+
+void Flock3D::drawMycelium(){
+	buildMyceliumMesh();
+	renderMyceliumMesh();
+}
+
+void Flock3D::buildMyceliumMesh(){
+	float linkD = myceliumLinkDist.get();
+	if (linkD <= 0.5f) { myceliumMesh.clear(); return; }
+	int stride    = std::max(1, (int)myceliumNodeStride.get());
+	int maxLinks  = std::max(1, (int)myceliumMaxLinks.get());
+	int knnK      = std::max(1, (int)myceliumKnnK.get());
+	int lifetime  = std::max(1, (int)myceliumLifetime.get());
+	float linkD2  = linkD * linkD;
+	float alpha   = myceliumAlpha.get();
+	float fadeNear = ofClamp(myceliumFadeNear.get(), 0.0f, 1.0f);
+	LinkMode mode = (LinkMode)ofClamp((int)myceliumLinkMode.get(), 0, 3);
+
+	// 1. 抽样 node 粒子
+	std::vector<int> nodeIdx;
+	nodeIdx.reserve(particles.size() / stride + 16);
+	for (int i = 0; i < (int)particles.size(); i += stride) {
+		const auto& p = particles[i];
+		if (p.alive && p.fadeOutTimer < 0) nodeIdx.push_back(i);
+	}
+	if (nodeIdx.size() < 2) { myceliumMesh.clear(); return; }
+
+	// 2. Bbox（紧贴 node 区域）
+	glm::vec3 minP(1e9f), maxP(-1e9f);
+	for (int idx : nodeIdx) {
+		const auto& p = particles[idx];
+		if (p.pos.x < minP.x) minP.x = p.pos.x;
+		if (p.pos.y < minP.y) minP.y = p.pos.y;
+		if (p.pos.z < minP.z) minP.z = p.pos.z;
+		if (p.pos.x > maxP.x) maxP.x = p.pos.x;
+		if (p.pos.y > maxP.y) maxP.y = p.pos.y;
+		if (p.pos.z > maxP.z) maxP.z = p.pos.z;
+	}
+	glm::vec3 pad(linkD * 0.51f);
+	minP -= pad; maxP += pad;
+	glm::vec3 bsize = maxP - minP;
+
+	// 3. Grid（cell size = linkD）
+	int rx = std::max(1, std::min(64, (int)std::ceil(bsize.x / linkD)));
+	int ry = std::max(1, std::min(64, (int)std::ceil(bsize.y / linkD)));
+	int rz = std::max(1, std::min(64, (int)std::ceil(bsize.z / linkD)));
+	int totalCells = rx * ry * rz;
+	float invLinkD = 1.0f / linkD;
+
+	std::vector<std::vector<int>> grid(totalCells);
+	for (int idx : nodeIdx) {
+		glm::vec3 rel = particles[idx].pos - minP;
+		int ix = (int)(rel.x * invLinkD); if (ix < 0) ix = 0; if (ix >= rx) ix = rx - 1;
+		int iy = (int)(rel.y * invLinkD); if (iy < 0) iy = 0; if (iy >= ry) iy = ry - 1;
+		int iz = (int)(rel.z * invLinkD); if (iz < 0) iz = 0; if (iz >= rz) iz = rz - 1;
+		grid[ix + iy * rx + iz * rx * ry].push_back(idx);
+	}
+
+	// 4. 准备 mesh
+	myceliumMesh.clear();
+	myceliumMesh.setMode(OF_PRIMITIVE_LINES);
+	auto& mv = myceliumMesh.getVertices();
+	auto& mc = myceliumMesh.getColors();
+
+	struct Cand { int idx; float d2; };
+	std::vector<Cand> cand;
+	cand.reserve(96);
+
+	// 颜色 + 距离 fade
+	auto pushLink = [&](int aIdx, int bIdx, float d2, float lifeFade) {
+		const auto& a = particles[aIdx];
+		const auto& b = particles[bIdx];
+		float dist = std::sqrt(d2);
+		float t = dist * invLinkD;       // 远近 fade（0..1）
+		float distW = 1.0f - t * (1.0f - fadeNear);
+		ofFloatColor col(
+			(a.color.r + b.color.r) * 0.5f,
+			(a.color.g + b.color.g) * 0.5f,
+			(a.color.b + b.color.b) * 0.5f,
+			alpha * distW * lifeFade
+		);
+		mv.push_back(a.pos);
+		mv.push_back(b.pos);
+		mc.push_back(col);
+		mc.push_back(col);
+	};
+
+	// 27-cell 邻居查询 lambda（生成 cand 列表）
+	auto queryNeighbors = [&](int n, bool dedup, float maxD2) {
+		const auto& a = particles[n];
+		glm::vec3 rel = a.pos - minP;
+		int cx = (int)(rel.x * invLinkD); if (cx < 0) cx = 0; if (cx >= rx) cx = rx - 1;
+		int cy = (int)(rel.y * invLinkD); if (cy < 0) cy = 0; if (cy >= ry) cy = ry - 1;
+		int cz = (int)(rel.z * invLinkD); if (cz < 0) cz = 0; if (cz >= rz) cz = rz - 1;
+
+		cand.clear();
+		for (int dz = -1; dz <= 1; dz++) {
+			int iz = cz + dz; if (iz < 0 || iz >= rz) continue;
+			for (int dy = -1; dy <= 1; dy++) {
+				int iy = cy + dy; if (iy < 0 || iy >= ry) continue;
+				for (int dx = -1; dx <= 1; dx++) {
+					int ix = cx + dx; if (ix < 0 || ix >= rx) continue;
+					const auto& bucket = grid[ix + iy * rx + iz * rx * ry];
+					for (int m : bucket) {
+						if (m == n) continue;
+						if (dedup && m <= n) continue;
+						glm::vec3 d = particles[m].pos - a.pos;
+						float d2 = glm::dot(d, d);
+						if (d2 > maxD2) continue;
+						cand.push_back({m, d2});
+					}
+				}
+			}
+		}
+	};
+
+	switch (mode) {
+		case LINK_DISTANCE: {
+			// 每 node 取最近的 maxLinks（dedup pair）
+			size_t maxVerts = nodeIdx.size() * (size_t)maxLinks * 2;
+			if (mv.capacity() < maxVerts) { mv.reserve(maxVerts); mc.reserve(maxVerts); }
+			for (int n : nodeIdx) {
+				queryNeighbors(n, true, linkD2);
+				if ((int)cand.size() > maxLinks) {
+					std::partial_sort(cand.begin(), cand.begin() + maxLinks, cand.end(),
+						[](const Cand& x, const Cand& y){ return x.d2 < y.d2; });
+					cand.resize(maxLinks);
+				}
+				for (const auto& c : cand) pushLink(n, c.idx, c.d2, 1.0f);
+			}
+			break;
+		}
+
+		case LINK_KNN: {
+			// 严格 K 近邻；不 dedup（双向都画 → 每 pair 出现两次但完全重叠 = OK）
+			// 这给出对称的 KNN graph 视觉
+			size_t maxVerts = nodeIdx.size() * (size_t)knnK * 2;
+			if (mv.capacity() < maxVerts) { mv.reserve(maxVerts); mc.reserve(maxVerts); }
+			// 用 dedup 减少一半冗余 — 双向 KNN 可能不对称但视觉差异很小
+			for (int n : nodeIdx) {
+				queryNeighbors(n, true, linkD2);
+				if ((int)cand.size() > knnK) {
+					std::partial_sort(cand.begin(), cand.begin() + knnK, cand.end(),
+						[](const Cand& x, const Cand& y){ return x.d2 < y.d2; });
+					cand.resize(knnK);
+				}
+				for (const auto& c : cand) pushLink(n, c.idx, c.d2, 1.0f);
+			}
+			break;
+		}
+
+		case LINK_LIFETIME: {
+			// DISTANCE + 持久化：link 一旦生成保留 N 帧
+			// 每帧：1) 找新 pair → reset age 0; 2) 所有现存 link age++; 3) age > lifetime 或 endpoint dead → drop
+			size_t maxVerts = persistentLinks.size() * 2 + nodeIdx.size() * (size_t)maxLinks * 2;
+			if (mv.capacity() < maxVerts) { mv.reserve(maxVerts); mc.reserve(maxVerts); }
+
+			// 1. 收集本帧新 pair
+			for (int n : nodeIdx) {
+				queryNeighbors(n, true, linkD2);
+				if ((int)cand.size() > maxLinks) {
+					std::partial_sort(cand.begin(), cand.begin() + maxLinks, cand.end(),
+						[](const Cand& x, const Cand& y){ return x.d2 < y.d2; });
+					cand.resize(maxLinks);
+				}
+				for (const auto& c : cand) {
+					uint64_t key = packPair(n, c.idx);
+					persistentLinks[key] = 0;   // reset age（新 link 也走这）
+				}
+			}
+
+			// 2. 推进所有 link age + 删除过期 / 死端点
+			for (auto it = persistentLinks.begin(); it != persistentLinks.end(); ) {
+				int aIdx = (int)(it->first >> 32);
+				int bIdx = (int)(it->first & 0xFFFFFFFF);
+				bool aliveOK = aIdx >= 0 && aIdx < (int)particles.size()
+				            && bIdx >= 0 && bIdx < (int)particles.size()
+				            && particles[aIdx].alive && particles[bIdx].alive;
+				it->second++;
+				if (!aliveOK || it->second > lifetime) {
+					it = persistentLinks.erase(it);
+				} else {
+					// 渲染（用当前粒子 pos，保持跟随）
+					glm::vec3 d = particles[bIdx].pos - particles[aIdx].pos;
+					float d2 = glm::dot(d, d);
+					// life fade：age=0 满，age=lifetime → 0
+					float lifeFade = 1.0f - (float)it->second / (float)lifetime;
+					pushLink(aIdx, bIdx, d2, lifeFade);
+					++it;
+				}
+			}
+			break;
+		}
+
+		case LINK_GABRIEL: {
+			// Gabriel graph: pair (a,b) 连线 iff midpoint M=(a+b)/2 半径 |a-b|/2 球内无其他 node
+			// 比 Delaunay 简单，给出空间均匀有机 mesh
+			// 仍用 maxLinks 上限避免极端密集 cluster 爆炸
+			size_t maxVerts = nodeIdx.size() * (size_t)maxLinks * 2;
+			if (mv.capacity() < maxVerts) { mv.reserve(maxVerts); mc.reserve(maxVerts); }
+
+			for (int n : nodeIdx) {
+				queryNeighbors(n, true, linkD2);
+				// Gabriel filter：对每个候选 (n, m)，检查是否有 c 落在 ball(midpoint, |nm|/2)
+				// c 候选 = cand 列表里的所有其他点（同 27-cell 邻居）
+				std::vector<Cand> kept;
+				kept.reserve(cand.size());
+				for (const auto& c1 : cand) {
+					const glm::vec3& pa = particles[n].pos;
+					const glm::vec3& pb = particles[c1.idx].pos;
+					glm::vec3 mid = (pa + pb) * 0.5f;
+					float r2 = c1.d2 * 0.25f;   // (|a-b|/2)^2
+					bool blocked = false;
+					for (const auto& c2 : cand) {
+						if (c2.idx == c1.idx) continue;
+						glm::vec3 dc = particles[c2.idx].pos - mid;
+						if (glm::dot(dc, dc) < r2) { blocked = true; break; }
+					}
+					if (!blocked) kept.push_back(c1);
+				}
+				// 保留最近的 maxLinks（即使 Gabriel 通过的更多）
+				if ((int)kept.size() > maxLinks) {
+					std::partial_sort(kept.begin(), kept.begin() + maxLinks, kept.end(),
+						[](const Cand& x, const Cand& y){ return x.d2 < y.d2; });
+					kept.resize(maxLinks);
+				}
+				for (const auto& c : kept) pushLink(n, c.idx, c.d2, 1.0f);
+			}
+			break;
+		}
+	}
+}
+
+void Flock3D::renderMyceliumMesh(){
+	auto& mv = myceliumMesh.getVertices();
+	if (mv.empty()) return;
+	float lw = ofClamp(myceliumLineWidth.get(), 0.5f, 8.0f);
+	glLineWidth(lw);
+	myceliumMesh.draw();
+	glLineWidth(1.0f);
+}
+
+//--------------------------------------------------------------
+//  FBO bloom — 帧间累积 + fade，模拟菌丝生长扩散
+//--------------------------------------------------------------
+void Flock3D::ensureMyceliumFbo() {
+	int w = ofGetWidth();
+	int h = ofGetHeight();
+	if (w < 4 || h < 4) return;
+	if (!myceliumFbo.isAllocated() || w != myceliumFboW || h != myceliumFboH) {
+		ofFboSettings settings;
+		settings.width = w; settings.height = h;
+		settings.internalformat = GL_RGBA;
+		settings.useDepth = false;
+		settings.useStencil = false;
+		settings.numSamples = 0;
+		myceliumFbo.allocate(settings);
+		myceliumFbo.begin();
+		ofClear(0, 0, 0, 0);
+		myceliumFbo.end();
+		myceliumFboW = w;
+		myceliumFboH = h;
+	}
+}
+
+void Flock3D::drawMyceliumViaFbo() {
+	ensureMyceliumFbo();
+	if (!myceliumFbo.isAllocated()) return;
+
+	// 1. Build mesh (在 FBO 外做，纯 CPU)
+	buildMyceliumMesh();
+	auto& mv = myceliumMesh.getVertices();
+
+	myceliumFbo.begin();
+
+	// 2. Fade prev content：alpha-blend 叠一个半透明黑色矩形
+	//    fboFade=0.95 → 每帧保留 95%，新内容叠加上去
+	float fade = ofClamp(myceliumFboFade.get(), 0.0f, 0.999f);
+	float fadeAmt = 1.0f - fade;
+	ofPushStyle();
+	ofEnableAlphaBlending();
+	ofSetColor(0, 0, 0, (int)(fadeAmt * 255));
+	ofDrawRectangle(0, 0, myceliumFbo.getWidth(), myceliumFbo.getHeight());
+	ofPopStyle();
+
+	// 3. Draw current frame mycelium with cam matrices
+	if (!mv.empty()) {
+		ofEnableBlendMode(OF_BLENDMODE_ADD);
+		cam.begin();
+		float lw = ofClamp(myceliumLineWidth.get(), 0.5f, 8.0f);
+		glLineWidth(lw);
+		myceliumMesh.draw();
+		glLineWidth(1.0f);
+		cam.end();
+		ofDisableBlendMode();
+	}
+
+	myceliumFbo.end();
+
+	// 4. Blit FBO 到屏幕（ADD blend → 不遮黑底，纯发光叠加）
+	ofPushStyle();
+	ofEnableBlendMode(OF_BLENDMODE_ADD);
+	ofSetColor(255);
+	myceliumFbo.draw(0, 0);
+	ofDisableBlendMode();
+	ofPopStyle();
 }
 
 //--------------------------------------------------------------

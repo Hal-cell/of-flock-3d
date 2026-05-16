@@ -39,7 +39,7 @@
 	<cluster_minMass>44.8</cluster_minMass>
 	<cluster_minCount>27</cluster_minCount>
 	<cluster_cellDensity>2</cluster_cellDensity>
-	<tail_length>5</tail_length>
+	<tail_length>0</tail_length>
 	<tail_audio_sens>0.934219</tail_audio_sens>
 	<tail_alpha>0.983418</tail_alpha>
 	<cluster_sensitivity>1</cluster_sensitivity>
@@ -49,4 +49,18 @@
 	<ambient>0.35377</ambient>
 	<glow>0.00990234</glow>
 	<conductor_amount>1</conductor_amount>
+	<Mycelium>
+		<enabled>1</enabled>
+		<link_dist>167.7</link_dist>
+		<max_links_node>14</max_links_node>
+		<node_stride>29</node_stride>
+		<alpha>0.35</alpha>
+		<far_fade>0.333</far_fade>
+		<line_width>3</line_width>
+		<link_mode>3</link_mode>
+		<KNN_K>8</KNN_K>
+		<lifetime__frames_>121</lifetime__frames_>
+		<fbo_bloom>0</fbo_bloom>
+		<fbo_fade>0.93</fbo_fade>
+	</Mycelium>
 </Flock_3D>
