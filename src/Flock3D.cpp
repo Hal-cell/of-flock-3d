@@ -603,7 +603,19 @@ void Flock3D::draw(){
 	static const EnergyStage stageSize {0.4f, 1.0f, 1};
 	// blend 0..1，再映射到 0.5..1.5 倍率（ca=0 时永远 1）
 	float sizeStageOf = stageSize.stageOf(energy);
-	float sizeMult = (1.0f - ca) + ca * (0.5f + sizeStageOf);    // 0.5..1.5 范围
+	float sizeMultTarget = (1.0f - ca) + ca * (0.5f + sizeStageOf);    // 0.5..1.5 范围
+
+	// 非对称 1-pole 平滑：快 attack（涨势保持 organic）+ 慢 release（避免 EXP 反向 sharp 起头）
+	// attack tau ≈ 80ms：响应"快但不瞬时"
+	// release tau ≈ 700ms：visually gentle decay
+	{
+		float dtFrame = ofGetLastFrameTime();
+		if (dtFrame > 0.1f) dtFrame = 0.1f;          // 防 spike
+		float tau = (sizeMultTarget >= sizeMultSmooth) ? 0.08f : 0.7f;
+		float k = 1.0f - expf(-dtFrame / tau);
+		sizeMultSmooth += (sizeMultTarget - sizeMultSmooth) * k;
+	}
+	float sizeMult = sizeMultSmooth;
 	// stageBri: brightness 跟得早一些（0.2..1.0 linear）
 	static const EnergyStage stageBri  {0.2f, 1.0f, 0};
 	float effBri = stageBri.blend(energy, matBrightness.get(), ca);

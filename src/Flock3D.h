@@ -160,6 +160,10 @@ private:
 	int   width  = 0, height = 0;
 	float noiseTimeOffset = 0.0f;
 
+	// EnergyStage size 输出的视觉平滑：能量上升时直接跟随（快 attack 保留 organic 涨势），
+	// 能量下降时缓慢回落（避免 EXP 曲线反向时的"sharp 起头"突兀感）
+	float sizeMultSmooth = 1.0f;
+
 	// ─── 通用粒子参数 ───
 	ofParameter<int>   particleCount;
 	ofParameter<float> worldRadius;
